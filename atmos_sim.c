@@ -253,7 +253,7 @@ void density_to_color(struct pixel *pix, double density, int x, int y) {
   struct grade_stop grade[stop_num], *floor, *ceil;
   int i;
   double frac, max;
-  max = 1.3;
+  max = 1.8;
   grade[0].val = 0.0;
   grade[0].color.r = 0.05; grade[0].color.g = 0.05; grade[0].color.b = 0.05;
   grade[1].val = (1.0/(stop_num-1))*max;
@@ -326,9 +326,9 @@ int main(int argc, char **argv) {
     bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.1;
     bloop->dur = rng()*frames*0.4;
     bloop->startt = rng()*frames - bloop->dur/2.0;
-    bloop->radv = rng()*5.0+1.0;
-    bloop->radh = rng()*48.0+2.0;
-    bloop->amp = 2.0;
+    bloop->radv = rng()*4.0+1.0;
+    bloop->radh = rng()*40.0+10.0;
+    bloop->amp = pow(2.0, rng()*0.8-0.4 );
   }
   
   current_frame = 10;
