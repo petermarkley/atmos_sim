@@ -3,7 +3,6 @@
 #include <string.h>
 #include "SDL2/SDL_image.h"
 #include "SDL2/SDL.h"
-//#include "anl.h"
 #include "spb.h"
 #include "vector3D.h"
 
@@ -60,6 +59,54 @@ void atmos_coords(double x, double y, struct atmos_coord *coord) {
   coord->alt = p.l - EARTH_RADIUS;
   coord->ground = ( (90.0 - p.y + (WINDOW_ANGLE/2.0)) / WINDOW_ANGLE ) * WINDOW_ARC_LENGTH;
   return;
+}
+
+struct atmos_bloop {
+  double x, y; //window coordinate
+  double t; //coordinate within life span (between 0 and 1)
+  double startx, starty, endx, endy; //motion endpoints
+  double startt, dur; //start time and duration
+  struct atmos_coord coord; //center of bloop
+  double radv, radh; //polar radii, vertical & horizontal
+  double amp; //peak amplitude (at centerpoint, midway through duration)
+} *atmos_bloop_list;
+//set dynamic variables for this bloop at the given time coordinate 
+void atmos_bloop_cycle(double t, struct atmos_bloop *bloop) {
+  //how far are we through this bloop's life span?
+  bloop->t = (t - bloop->startt) / (bloop->dur);
+  //set center point at proper location along motion path
+  bloop->x = (bloop->endx - bloop->startx) * bloop->t + bloop->startx;
+  bloop->y = (bloop->endy - bloop->starty) * bloop->t + bloop->starty;
+  //calculate altitude & ground position of center point
+  atmos_coords(bloop->x,bloop->y,&(bloop->coord));
+  return;
+}
+//calculate the multiplier that this bloop applies to the density field at the given sample point
+double atmos_bloop_calc(double x, double y, double t, struct atmos_bloop *bloop) {
+  struct atmos_coord sample;
+  double sv, sh, ratio;
+  double dist, amp, val;
+  //sanity check
+  if (bloop->t <= 0.0 && bloop->t >= 1.0) {
+    return 1.0;
+  }
+  //find sample in bloop-centered coordinate space
+  atmos_coords(x,y,&sample);
+  sh = sample.ground - bloop->coord.ground;
+  sv = sample.alt - bloop->coord.alt;
+  //transform coordinate space into circle
+  ratio = bloop->radh / bloop->radv;
+  sv = sv*ratio;
+  //calculate distance from center
+  dist = sqrt(pow(sv,2.0)+pow(sh,2.0));
+  if (dist > bloop->radh) {
+    return 1.0;
+  }
+  //calculate current amplitude of bloop
+  amp = (0.5 - cos(bloop->t*PI*2.0)*0.5) * (bloop->amp-1.0) + 1.0;
+  //calculate final value
+  val = (cos((dist/bloop->radh)*PI)*0.5+0.5) * (amp-1.0) + 1.0;
+  return val;
 }
 
 //calculate standard density gradient for the given point
@@ -226,11 +273,27 @@ void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
 int main(int argc, char **argv) {
   struct SDL_Surface *s = NULL;
   struct pixel pix;
+  struct atmos_bloop bloop;
   int x, y;
   global_init();
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
   if (atmos_init() == -1) {
     return 1;
+  }
+  
+  bloop.startx = IMAGE_WIDTH/2.0;
+  bloop.starty = IMAGE_HEIGHT/2.0;
+  bloop.endx = bloop.startx;
+  bloop.endy = bloop.starty;
+  bloop.startt = 0.0; bloop.dur = 2.0;
+  bloop.radv = 5.0;
+  bloop.radh = 170.0;
+  bloop.amp = 5.0;
+  atmos_bloop_cycle(1.0,&bloop);
+  for (y=0; y < IMAGE_HEIGHT; y++) {
+    for (x=0; x < IMAGE_WIDTH; x++) {
+      atmos[y][x] = atmos[y][x] * atmos_bloop_calc(x,y,1.0,&bloop);
+    }
   }
   
   if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
