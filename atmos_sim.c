@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/param.h>
 #include <math.h>
 #include <string.h>
 #include "SDL2/SDL_image.h"
@@ -107,6 +109,24 @@ double atmos_bloop_calc(double x, double y, double t, struct atmos_bloop *bloop)
   //calculate final value
   val = (cos((dist/bloop->radh)*PI)*0.5+0.5) * (amp-1.0) + 1.0;
   return val;
+}
+//apply the bloop to the density field
+void atmos_bloop_apply(double t, struct atmos_bloop *bloop) {
+  int x, y;
+  int min_x, min_y, max_x, max_y;
+  atmos_bloop_cycle(t,bloop);
+  //calculate a bounding box
+  min_x = MAX(0, (int)(bloop->x - bloop->radh*IMAGE_RES));
+  max_x = MIN(IMAGE_WIDTH-1, (int)(bloop->x + bloop->radh*IMAGE_RES));
+  min_y = MAX(0, (int)(bloop->y - bloop->radv*IMAGE_RES));
+  max_y = MIN(IMAGE_HEIGHT-1, (int)(bloop->y + bloop->radv*IMAGE_RES));
+  //loop through pixels inside bounding box
+  for (y=min_y; y <= max_y; y++) {
+    for (x=min_x; x <= max_x; x++) {
+      atmos[y][x] = atmos[y][x] * atmos_bloop_calc(x,y,t,bloop);
+    }
+  }
+  return;
 }
 
 //calculate standard density gradient for the given point
@@ -270,32 +290,59 @@ void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
   ((Uint8 *)s->pixels)[y*s->pitch+x*3+2] = (Uint8)(255.0*fmax(0,fmin(1,p.r)));
 }
 
+long double rng(void) {
+  return ((long double)rand())/((long double)RAND_MAX);
+}
+
 int main(int argc, char **argv) {
+  struct spb_instance spb;
   struct SDL_Surface *s = NULL;
   struct pixel pix;
-  struct atmos_bloop bloop;
-  int x, y;
+  struct atmos_bloop *bloop;
+  int x, y, i;
+  //animation stuff
+  int frames = 20;
+  int current_frame;
+  int bloops_per_frame = 20;
+  int bloop_num = bloops_per_frame * frames;
+  
+  //initialize stuff
   global_init();
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
+  srand(235432);
   if (atmos_init() == -1) {
     return 1;
   }
-  
-  bloop.startx = IMAGE_WIDTH/2.0;
-  bloop.starty = IMAGE_HEIGHT/2.0;
-  bloop.endx = bloop.startx;
-  bloop.endy = bloop.starty;
-  bloop.startt = 0.0; bloop.dur = 2.0;
-  bloop.radv = 5.0;
-  bloop.radh = 170.0;
-  bloop.amp = 5.0;
-  atmos_bloop_cycle(1.0,&bloop);
-  for (y=0; y < IMAGE_HEIGHT; y++) {
-    for (x=0; x < IMAGE_WIDTH; x++) {
-      atmos[y][x] = atmos[y][x] * atmos_bloop_calc(x,y,1.0,&bloop);
-    }
+  //generate random bloops
+  if ((atmos_bloop_list = (struct atmos_bloop *)calloc(sizeof(struct atmos_bloop), bloop_num)) == NULL) {
+    fprintf(stderr,"calloc() returned NULL\n");
+    return 1;
+  }
+  for (i=0; i < bloop_num; i++) {
+    bloop = &(atmos_bloop_list[i]);
+    bloop->startx = rng()*IMAGE_WIDTH;
+    bloop->starty = rng()*IMAGE_HEIGHT;
+    bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.1;
+    bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.1;
+    bloop->dur = rng()*frames*0.4;
+    bloop->startt = rng()*frames - bloop->dur/2.0;
+    bloop->radv = rng()*5.0+1.0;
+    bloop->radh = rng()*48.0+2.0;
+    bloop->amp = 2.0;
   }
   
+  current_frame = 10;
+  spb.real_goal = bloop_num;
+  spb.bar_goal = 20;
+  spb_init(&spb,"",NULL);
+  for (i=0; i < bloop_num; i++) {
+    bloop = &(atmos_bloop_list[i]);
+    atmos_bloop_apply(current_frame,bloop);
+    spb.real_progress++;
+    spb_update(&spb);
+  }
+  
+  //output image
   if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
     fprintf(stderr,"Failed to create SDL_Surface.\n");
     return -1;
@@ -313,7 +360,9 @@ int main(int argc, char **argv) {
   IMG_SavePNG(s,IMAGE_OUTPUT);
   SDL_FreeSurface(s);
   
+  //clean up
   atmos_free();
+  free(atmos_bloop_list);
   return 0;
 }
 
