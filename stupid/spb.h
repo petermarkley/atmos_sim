@@ -1,5 +1,5 @@
 //SPB (Stupid Progress Bar)
-//Copyright 2013 Peter Markley <quartz@malexmedia.net>
+//Copyright 2013 Peter Markley <peter@petermarkley.com>
 
 #ifndef __SPB_HEADER
 #define __SPB_HEADER
