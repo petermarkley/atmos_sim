@@ -20,7 +20,6 @@
 #define IMAGE_RES 10.0 // pixels per kilometer
 
 #define FRAME_FOLDER "frames"
-#define IMAGE_OUTPUT "out.png"
 
 //let's caculate some global variables based on the input metrics above
 double WINDOW_ANGLE, WINDOW_TOP, WINDOW_RIGHT, WINDOW_LEFT, WINDOW_BOTTOM;
@@ -118,6 +117,10 @@ void atmos_bloop_apply(double t, struct atmos_bloop *bloop) {
   int x, y;
   int min_x, min_y, max_x, max_y;
   atmos_bloop_cycle(t,bloop);
+  //sanity check
+  if (bloop->t <= 0.0 && bloop->t >= 1.0) {
+    return;
+  }
   //calculate a bounding box
   min_x = MAX(0, (int)(bloop->x - bloop->radh*IMAGE_RES));
   max_x = MIN(IMAGE_WIDTH-1, (int)(bloop->x + bloop->radh*IMAGE_RES));
@@ -305,15 +308,19 @@ int main(int argc, char **argv) {
   struct atmos_bloop *bloop;
   int x, y, i;
   //animation stuff
-  int frames = 20;
+  int frames = 50;
   int current_frame;
-  int bloops_per_frame = 20;
+  int bloops_per_frame = 10;
   int bloop_num = bloops_per_frame * frames;
+  int frame_digits = (int)ceil(log10(frames));
+  char frame_fmt_str[MAX_STR];
+  char frame_file[MAX_STR];
   
   //initialize stuff
   global_init();
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
   srand(235432);
+  snprintf(frame_fmt_str, MAX_STR, "%s/%%0%dd.png", FRAME_FOLDER, frame_digits);
   if (atmos_init() == -1) {
     return 1;
   }
@@ -343,43 +350,55 @@ int main(int argc, char **argv) {
     bloop = &(atmos_bloop_list[i]);
     bloop->startx = rng()*IMAGE_WIDTH;
     bloop->starty = rng()*IMAGE_HEIGHT;
-    bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.1;
-    bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.1;
-    bloop->dur = rng()*frames*0.4;
+    bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.02;
+    bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.02;
+    bloop->dur = rng()*frames*1.2;
     bloop->startt = rng()*frames - bloop->dur/2.0;
     bloop->radv = rng()*4.0+1.0;
     bloop->radh = rng()*40.0+10.0;
-    bloop->amp = pow(2.0, rng()*0.8-0.4 );
+    bloop->amp = pow(2.0, rng()*0.6-0.3 );
   }
   
-  current_frame = 10;
-  spb.real_goal = bloop_num;
+  spb.real_goal = bloop_num*frames;
   spb.bar_goal = 20;
   spb_init(&spb,"",NULL);
-  for (i=0; i < bloop_num; i++) {
-    bloop = &(atmos_bloop_list[i]);
-    atmos_bloop_apply(current_frame,bloop);
-    spb.real_progress++;
-    spb_update(&spb);
-  }
-  
-  //output image
-  if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
-    fprintf(stderr, "Failed to create SDL_Surface.\n");
-    return -1;
-  }
-  for (y=0; y < IMAGE_HEIGHT; y++) {
-    for (x=0; x < IMAGE_WIDTH; x++) {
-      if (atmos_bounds(x,y)) {
-        density_to_color(&pix,atmos[y][x],x,y);
-      } else {
-        pix.r = pix.g = pix.b = 0.0;
+  for (current_frame=1; current_frame <= frames; current_frame++) {
+    
+    //start with atmosphere baseline
+    for (y=0; y < IMAGE_HEIGHT; y++) {
+      for (x=0; x < IMAGE_WIDTH; x++) {
+        atmos[y][x] = atmos_baseline(x,y);
       }
-      pixel_insert(s,pix,x,y);
     }
+    
+    //apply bloops
+    for (i=0; i < bloop_num; i++) {
+      bloop = &(atmos_bloop_list[i]);
+      atmos_bloop_apply(current_frame,bloop);
+      spb.real_progress++;
+      spb_update(&spb);
+    }
+    
+    //output image
+    if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
+      fprintf(stderr, "Failed to create SDL_Surface.\n");
+      return -1;
+    }
+    for (y=0; y < IMAGE_HEIGHT; y++) {
+      for (x=0; x < IMAGE_WIDTH; x++) {
+        if (atmos_bounds(x,y)) {
+          density_to_color(&pix,atmos[y][x],x,y);
+        } else {
+          pix.r = pix.g = pix.b = 0.0;
+        }
+        pixel_insert(s,pix,x,y);
+      }
+    }
+    snprintf(frame_file, MAX_STR, frame_fmt_str, current_frame);
+    IMG_SavePNG(s,frame_file);
+    SDL_FreeSurface(s);
+    
   }
-  IMG_SavePNG(s,IMAGE_OUTPUT);
-  SDL_FreeSurface(s);
   
   //clean up
   atmos_free();

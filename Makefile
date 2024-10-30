@@ -8,4 +8,4 @@ all: atmos_sim.c
 	cc -o atmos_sim atmos_sim.c $(MODULES) $(CFLAGS) $(PFLAGS) $(LFLAGS)
 
 clean:
-	rm -rf atmos_sim atmos_sim.dSYM
+	rm -rf atmos_sim atmos_sim.dSYM frames
