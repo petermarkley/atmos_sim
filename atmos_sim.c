@@ -20,10 +20,12 @@
 #define IMAGE_RES 10.0 // pixels per kilometer
 
 #define FRAME_FOLDER "frames"
+#define FRAMES 50
+#define BLOOPS_PER_FRAME 10
 
 //let's caculate some global variables based on the input metrics above
 double WINDOW_ANGLE, WINDOW_TOP, WINDOW_RIGHT, WINDOW_LEFT, WINDOW_BOTTOM;
-int IMAGE_WIDTH, IMAGE_HEIGHT;
+int IMAGE_WIDTH, IMAGE_HEIGHT, BLOOP_NUM;
 void global_init() {
   WINDOW_ANGLE = (WINDOW_ARC_LENGTH/EARTH_CIRCUMFERENCE) * 360.0; // degrees
   WINDOW_TOP = EARTH_RADIUS + WINDOW_ALTITUDE; // kilometers
@@ -32,6 +34,11 @@ void global_init() {
   WINDOW_BOTTOM = cos((WINDOW_ANGLE/2.0) * (PI/180.0)) * EARTH_RADIUS; // kilometers
   IMAGE_WIDTH = (int)ceil( (WINDOW_RIGHT-WINDOW_LEFT) * IMAGE_RES ); // pixels
   IMAGE_HEIGHT = (int)ceil( (WINDOW_TOP-WINDOW_BOTTOM) * IMAGE_RES ); // pixels
+  BLOOP_NUM = FRAMES * BLOOPS_PER_FRAME;
+}
+
+long double rng(void) {
+  return ((long double)rand())/((long double)RAND_MAX);
 }
 
 struct pixel {
@@ -73,9 +80,32 @@ struct atmos_bloop {
   struct atmos_coord coord; //center of bloop
   double radv, radh; //polar radii, vertical & horizontal
   double amp; //peak amplitude (at centerpoint, midway through duration)
-} *atmos_bloop_list;
+} *bloop_list;
+//generate random bloops
+int bloop_init() {
+  struct atmos_bloop *bloop;
+  int i;
+  if ((bloop_list = (struct atmos_bloop *)calloc(sizeof(struct atmos_bloop), BLOOP_NUM)) == NULL) {
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
+    return -1;
+  }
+  for (i=0; i < BLOOP_NUM; i++) {
+    bloop = &(bloop_list[i]);
+    bloop->startx = rng()*IMAGE_WIDTH;
+    bloop->starty = rng()*IMAGE_HEIGHT;
+    bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.02;
+    bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.02;
+    bloop->dur = rng()*FRAMES*1.2;
+    bloop->startt = rng()*FRAMES - bloop->dur/2.0;
+    bloop->radv = rng()*4.0+1.0;
+    bloop->radh = rng()*40.0+10.0;
+    bloop->amp = pow(2.0, rng()*0.6-0.3 );
+  }
+  return 0;
+}
+
 //set dynamic variables for this bloop at the given time coordinate 
-void atmos_bloop_cycle(double t, struct atmos_bloop *bloop) {
+void bloop_cycle(double t, struct atmos_bloop *bloop) {
   //how far are we through this bloop's life span?
   bloop->t = (t - bloop->startt) / (bloop->dur);
   //set center point at proper location along motion path
@@ -86,7 +116,7 @@ void atmos_bloop_cycle(double t, struct atmos_bloop *bloop) {
   return;
 }
 //calculate the multiplier that this bloop applies to the density field at the given sample point
-double atmos_bloop_calc(double x, double y, double t, struct atmos_bloop *bloop) {
+double bloop_calc(double x, double y, double t, struct atmos_bloop *bloop) {
   struct atmos_coord sample;
   double sv, sh, ratio;
   double dist, amp, val;
@@ -113,10 +143,10 @@ double atmos_bloop_calc(double x, double y, double t, struct atmos_bloop *bloop)
   return val;
 }
 //apply the bloop to the density field
-void atmos_bloop_apply(double t, struct atmos_bloop *bloop) {
+void bloop_apply(double t, struct atmos_bloop *bloop) {
   int x, y;
   int min_x, min_y, max_x, max_y;
-  atmos_bloop_cycle(t,bloop);
+  bloop_cycle(t,bloop);
   //sanity check
   if (bloop->t <= 0.0 && bloop->t >= 1.0) {
     return;
@@ -129,7 +159,7 @@ void atmos_bloop_apply(double t, struct atmos_bloop *bloop) {
   //loop through pixels inside bounding box
   for (y=min_y; y <= max_y; y++) {
     for (x=min_x; x <= max_x; x++) {
-      atmos[y][x] = atmos[y][x] * atmos_bloop_calc(x,y,t,bloop);
+      atmos[y][x] = atmos[y][x] * bloop_calc(x,y,t,bloop);
     }
   }
   return;
@@ -296,10 +326,6 @@ void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
   ((Uint8 *)s->pixels)[y*s->pitch+x*3+2] = (Uint8)(255.0*fmax(0,fmin(1,p.r)));
 }
 
-long double rng(void) {
-  return ((long double)rand())/((long double)RAND_MAX);
-}
-
 int main(int argc, char **argv) {
   struct spb_instance spb;
   struct stat dir;
@@ -308,11 +334,8 @@ int main(int argc, char **argv) {
   struct atmos_bloop *bloop;
   int x, y, i;
   //animation stuff
-  int frames = 50;
   int current_frame;
-  int bloops_per_frame = 10;
-  int bloop_num = bloops_per_frame * frames;
-  int frame_digits = (int)ceil(log10(frames));
+  int frame_digits = (int)ceil(log10(FRAMES));
   char frame_fmt_str[MAX_STR];
   char frame_file[MAX_STR];
   
@@ -321,7 +344,7 @@ int main(int argc, char **argv) {
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
   srand(235432);
   snprintf(frame_fmt_str, MAX_STR, "%s/%%0%dd.png", FRAME_FOLDER, frame_digits);
-  if (atmos_init() == -1) {
+  if (atmos_init() == -1 || bloop_init() == -1) {
     return 1;
   }
   //make sure output folder exists
@@ -341,28 +364,11 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
-  //generate random bloops
-  if ((atmos_bloop_list = (struct atmos_bloop *)calloc(sizeof(struct atmos_bloop), bloop_num)) == NULL) {
-    fprintf(stderr, "calloc(): %s\n", strerror(errno));
-    return 1;
-  }
-  for (i=0; i < bloop_num; i++) {
-    bloop = &(atmos_bloop_list[i]);
-    bloop->startx = rng()*IMAGE_WIDTH;
-    bloop->starty = rng()*IMAGE_HEIGHT;
-    bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.02;
-    bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.02;
-    bloop->dur = rng()*frames*1.2;
-    bloop->startt = rng()*frames - bloop->dur/2.0;
-    bloop->radv = rng()*4.0+1.0;
-    bloop->radh = rng()*40.0+10.0;
-    bloop->amp = pow(2.0, rng()*0.6-0.3 );
-  }
   
-  spb.real_goal = bloop_num*frames;
+  spb.real_goal = BLOOP_NUM*FRAMES;
   spb.bar_goal = 20;
   spb_init(&spb,"",NULL);
-  for (current_frame=1; current_frame <= frames; current_frame++) {
+  for (current_frame=1; current_frame <= FRAMES; current_frame++) {
     
     //start with atmosphere baseline
     for (y=0; y < IMAGE_HEIGHT; y++) {
@@ -372,9 +378,9 @@ int main(int argc, char **argv) {
     }
     
     //apply bloops
-    for (i=0; i < bloop_num; i++) {
-      bloop = &(atmos_bloop_list[i]);
-      atmos_bloop_apply(current_frame,bloop);
+    for (i=0; i < BLOOP_NUM; i++) {
+      bloop = &(bloop_list[i]);
+      bloop_apply(current_frame,bloop);
       spb.real_progress++;
       spb_update(&spb);
     }
@@ -402,7 +408,7 @@ int main(int argc, char **argv) {
   
   //clean up
   atmos_free();
-  free(atmos_bloop_list);
+  free(bloop_list);
   return 0;
 }
 
