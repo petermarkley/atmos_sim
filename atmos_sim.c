@@ -22,6 +22,8 @@
 #define FRAME_FOLDER "frames"
 #define FRAMES 50
 #define BLOOPS_PER_FRAME 10
+#define CONTOUR_NUM 18
+#define DENSITY_MAX 1.8 // kg/m^3
 
 //let's caculate some global variables based on the input metrics above
 double WINDOW_ANGLE, WINDOW_TOP, WINDOW_RIGHT, WINDOW_LEFT, WINDOW_BOTTOM;
@@ -70,6 +72,46 @@ void atmos_coords(double x, double y, struct atmos_coord *coord) {
   coord->alt = p.l - EARTH_RADIUS;
   coord->ground = ( (90.0 - p.y + (WINDOW_ANGLE/2.0)) / WINDOW_ANGLE ) * WINDOW_ARC_LENGTH;
   return;
+}
+//interpolate values for fractional field coordinates
+double atmos_val(double x, double y) {
+  double tl, tr, bl, br;
+  int top, left, bottom, right;
+  double fracx, fracy;
+  double wtl, wtr, wbl, wbr;
+  double final;
+  //sanity check
+  if (x < 0.5 || x > IMAGE_WIDTH-0.5 || y < 0.5 || y > IMAGE_WIDTH-0.5) {
+    return 0.0;
+  }
+  //check for lucky cases when we can skip the fancy math
+  if (x == (double)((int)x) && y == (double)((int)y)) {
+    return atmos[(int)y][(int)x];
+  }
+  
+  //okay, gotta do the work ...
+  
+  //safe array indices
+  top = MAX(0,MIN((IMAGE_HEIGHT-1), (int)floor(y) ));
+  left = MAX(0,MIN((IMAGE_WIDTH-1), (int)floor(x) ));
+  bottom = MAX(0,MIN((IMAGE_HEIGHT-1), (int)ceil(y) ));
+  right = MAX(0,MIN((IMAGE_WIDTH-1), (int)ceil(x) ));
+  //values for corners of fractional region
+  tl = atmos[top][left];
+  tr = atmos[top][right];
+  bl = atmos[bottom][left];
+  br = atmos[bottom][right];
+  //components of position in fractional region
+  fracx = x-floor(x);
+  fracy = y-floor(y);
+  //weights for each corner
+  wtl = (1.0-fracx)*(1.0-fracy);
+  wtr = fracx*(1.0-fracy);
+  wbl = (1.0-fracx)*fracy;
+  wbr = fracx*fracy;
+  //final
+  final = tl*wtl + tr*wtr + bl*wbl + br*wbr;
+  return final;
 }
 
 struct atmos_bloop {
@@ -163,6 +205,80 @@ void bloop_apply(double t, struct atmos_bloop *bloop) {
     }
   }
   return;
+}
+
+struct atmos_contour {
+  double density;
+} *contour_list;
+int contour_init() {
+  struct atmos_contour *contour;
+  int i;
+  double interval = ((double)DENSITY_MAX) / ((double)CONTOUR_NUM);
+  double density;
+  if ((contour_list = (struct atmos_contour *)calloc(sizeof(struct atmos_contour), CONTOUR_NUM)) == NULL) {
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
+    return -1;
+  }
+  for (i=0; i < CONTOUR_NUM; i++) {
+    density = ((double)(i+1)) * interval;
+    contour = &(contour_list[i]);
+    contour->density = density;
+  }
+  return 0;
+}
+//return 1 if given pixel is on a contour line, otherwise 0
+int contour_detect(int x, int y) {
+  struct atmos_contour *contour;
+  double tl, tr, bl, br;
+  int i, itl, itr, ibl, ibr;
+  double prev, curr;
+  /*
+   |  take a sample at each corner of this pixel, halfway between
+   |  it and the neighboring pixels
+   */
+  tl = atmos_val(((double)x)-0.5,((double)y)-0.5);
+  tr = atmos_val(((double)x)+0.5,((double)y)-0.5);
+  bl = atmos_val(((double)x)-0.5,((double)y)+0.5);
+  br = atmos_val(((double)x)+0.5,((double)y)+0.5);
+  //corner indices in contour array will be negative until initialized
+  itl = itr = ibl = ibr = -1;
+  //find corner indices
+  curr = -1.0;
+  for (i=0; i < CONTOUR_NUM; i++) {
+    contour = &(contour_list[i]);
+    prev = curr;
+    curr = contour->density;
+    if (tl > prev && tl <= curr) {
+      itl = i;
+    }
+    if (tr > prev && tr <= curr) {
+      itr = i;
+    }
+    if (bl > prev && bl <= curr) {
+      ibl = i;
+    }
+    if (br > prev && br <= curr) {
+      ibr = i;
+    }
+    //are we done yet?
+    if (itl >= 0 && itr >= 0 && ibl >= 0 && ibr >= 0) {
+      break;
+    }
+  }
+  /*
+   |  if all four corners lie within the same density interval, then
+   |  no contour line runs through this pixel
+   */
+  if (
+    (itl == itr)
+    && (ibl == ibr)
+    && (itl == ibl)
+    //&& (itr == ibr) //this last comparison can be inferred
+  ) {
+    return 0;
+  } else {
+    return 1;
+  }
 }
 
 //calculate standard density gradient for the given point
@@ -288,17 +404,16 @@ void density_to_color(struct pixel *pix, double density, int x, int y) {
   int stop_num = 5;
   struct grade_stop grade[stop_num], *floor, *ceil;
   int i;
-  double frac, max;
-  max = 1.8;
+  double frac;
   grade[0].val = 0.0;
   grade[0].color.r = 0.05; grade[0].color.g = 0.05; grade[0].color.b = 0.05;
-  grade[1].val = (1.0/(stop_num-1))*max;
+  grade[1].val = (1.0/(stop_num-1))*DENSITY_MAX;
   grade[1].color.r = 0.00; grade[1].color.g = 0.00; grade[1].color.b = 0.20;
-  grade[2].val = (2.0/(stop_num-1))*max;
+  grade[2].val = (2.0/(stop_num-1))*DENSITY_MAX;
   grade[2].color.r = 0.00; grade[2].color.g = 0.18; grade[2].color.b = 0.20;
-  grade[3].val = (3.0/(stop_num-1))*max;
+  grade[3].val = (3.0/(stop_num-1))*DENSITY_MAX;
   grade[3].color.r = 0.20; grade[3].color.g = 0.20; grade[3].color.b = 0.00;
-  grade[4].val = (4.0/(stop_num-1))*max;
+  grade[4].val = (4.0/(stop_num-1))*DENSITY_MAX;
   grade[4].color.r = 0.20; grade[4].color.g = 0.04; grade[4].color.b = 0.00;
   for (i=0; i < stop_num; i++) {
     floor = &(grade[i]);
@@ -344,7 +459,11 @@ int main(int argc, char **argv) {
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
   srand(235432);
   snprintf(frame_fmt_str, MAX_STR, "%s/%%0%dd.png", FRAME_FOLDER, frame_digits);
-  if (atmos_init() == -1 || bloop_init() == -1) {
+  if (
+    atmos_init() == -1 ||
+    bloop_init() == -1 ||
+    contour_init() == -1
+  ) {
     return 1;
   }
   //make sure output folder exists
@@ -385,21 +504,41 @@ int main(int argc, char **argv) {
       spb_update(&spb);
     }
     
-    //output image
+    //render image
     if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
       fprintf(stderr, "Failed to create SDL_Surface.\n");
       return -1;
     }
     for (y=0; y < IMAGE_HEIGHT; y++) {
       for (x=0; x < IMAGE_WIDTH; x++) {
+        //are we inside the wedge-shaped window?
         if (atmos_bounds(x,y)) {
+          
+          /*
+           |  LAYER 1
+           |  density colors
+           */
           density_to_color(&pix,atmos[y][x],x,y);
+          
+          /*
+           |  LAYER 2
+           |  contour lines
+           */
+          if (contour_detect(x,y)) {
+            pix.r += 0.3;
+            pix.g += 0.3;
+            pix.b += 0.3;
+          }
+          
         } else {
+          //outside window, everything is black
           pix.r = pix.g = pix.b = 0.0;
         }
+        //all done, let's render this pixel
         pixel_insert(s,pix,x,y);
       }
     }
+    //output image file
     snprintf(frame_file, MAX_STR, frame_fmt_str, current_frame);
     IMG_SavePNG(s,frame_file);
     SDL_FreeSurface(s);
@@ -409,6 +548,7 @@ int main(int argc, char **argv) {
   //clean up
   atmos_free();
   free(bloop_list);
+  free(contour_list);
   return 0;
 }
 
