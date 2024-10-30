@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/param.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <math.h>
 #include <string.h>
 #include "SDL2/SDL_image.h"
@@ -17,6 +19,7 @@
 
 #define IMAGE_RES 10.0 // pixels per kilometer
 
+#define FRAME_FOLDER "frames"
 #define IMAGE_OUTPUT "out.png"
 
 //let's caculate some global variables based on the input metrics above
@@ -220,12 +223,12 @@ int atmos_init() {
   
   //atmospheric density field
   if ((atmos = (double **)calloc(sizeof(double *), IMAGE_HEIGHT)) == NULL) {
-    fprintf(stderr, "calloc() returned NULL\n");
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
     return -1;
   }
   for (y=0; y < IMAGE_HEIGHT; y++) {
     if ((atmos[y] = (double *)calloc(sizeof(double), IMAGE_WIDTH)) == NULL) {
-      fprintf(stderr, "calloc() returned NULL\n");
+      fprintf(stderr, "calloc(): %s\n", strerror(errno));
       return -1;
     }
     for (x=0; x < IMAGE_WIDTH; x++) {
@@ -296,6 +299,7 @@ long double rng(void) {
 
 int main(int argc, char **argv) {
   struct spb_instance spb;
+  struct stat dir;
   struct SDL_Surface *s = NULL;
   struct pixel pix;
   struct atmos_bloop *bloop;
@@ -313,9 +317,26 @@ int main(int argc, char **argv) {
   if (atmos_init() == -1) {
     return 1;
   }
+  //make sure output folder exists
+  if (stat(FRAME_FOLDER, &dir) == 0) {
+    if (!S_ISDIR(dir.st_mode)) {
+      fprintf(stderr, "Path '%s' exists but is not a folder\n",FRAME_FOLDER);
+      return 1;
+    }
+  } else {
+    if (errno == ENOENT) {
+      if (mkdir(FRAME_FOLDER, 0700) != 0) {
+        fprintf(stderr, "mkdir() on '%s': %s\n", FRAME_FOLDER, strerror(errno));
+        return 1;
+      }
+    } else {
+      fprintf(stderr, "stat() on '%s': %s\n", FRAME_FOLDER, strerror(errno));
+      return 1;
+    }
+  }
   //generate random bloops
   if ((atmos_bloop_list = (struct atmos_bloop *)calloc(sizeof(struct atmos_bloop), bloop_num)) == NULL) {
-    fprintf(stderr,"calloc() returned NULL\n");
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
     return 1;
   }
   for (i=0; i < bloop_num; i++) {
@@ -344,7 +365,7 @@ int main(int argc, char **argv) {
   
   //output image
   if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
-    fprintf(stderr,"Failed to create SDL_Surface.\n");
+    fprintf(stderr, "Failed to create SDL_Surface.\n");
     return -1;
   }
   for (y=0; y < IMAGE_HEIGHT; y++) {
