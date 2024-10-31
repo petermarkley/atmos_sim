@@ -32,6 +32,7 @@
 #define BLOOPS_PER_FRAME 10
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
+#define RAY_STEP 1.0 // step size for raytracing through continuously refractive medium
 
 /*
  |  ==================
@@ -106,15 +107,15 @@ struct grade_stop {
 };
 //used for sight line raytracing
 struct ray_node {
-  long double x, y;
+  double x, y;
 };
 struct atmos_ray {
   struct ray_node *nodes;
   int buffsize; //memory buffer size
   int num; //actual number used so far
-  struct vectorC3D dir; //direction vector at ray endpoint
-  struct ray_node *start; //this should point to the beginning node
   struct ray_node *end; //this should point to the end node
+  struct vectorC3D dir_c;
+  struct vectorP3D dir_p;
 } sight;
 
 //atmspheric density field, in kg/m^3
@@ -209,8 +210,8 @@ void atmos_coords(double x, double y, struct atmos_coord *coord) {
   coord->ground = ( (90.0 - p.y + (WINDOW_ANGLE/2.0)) / WINDOW_ANGLE ) * WINDOW_ARC_LENGTH;
   return;
 }
-//calculate window point from altitude & ground point
-void atmos_window(double *x, double *y, struct atmos_coord *coord) {
+//calculate window point from altitude & ground point (and save vectors if non-null pointers are provided)
+void atmos_window(double *x, double *y, struct atmos_coord *coord, struct vectorC3D *res_c, struct vectorP3D *res_p) {
   struct vectorC3D c;
   struct vectorP3D p;
   p.l = coord->alt + EARTH_RADIUS;
@@ -219,6 +220,13 @@ void atmos_window(double *x, double *y, struct atmos_coord *coord) {
   vectorC3D_assign(&c,vectorP3D_cartesian(p));
   x[0] = ((c.x-WINDOW_LEFT)/(WINDOW_RIGHT-WINDOW_LEFT)) * IMAGE_WIDTH;
   y[0] = (1.0 - (c.z-WINDOW_BOTTOM)/(WINDOW_TOP-WINDOW_BOTTOM)) * IMAGE_HEIGHT;
+  //optionally save intermediate vectors
+  if (res_c != NULL) {
+    vectorC3D_assign(res_c,c);
+  }
+  if (res_p != NULL) {
+    vectorP3D_assign(res_p,p);
+  }
   return;
 }
 //interpolate values for fractional window coordinates
@@ -568,11 +576,25 @@ long double density_to_ior(long double density) {
 
 //allocate memory buffer
 int ray_init() {
+  struct atmos_coord coord;
+  struct ray_node *node;
+  //initialize buffer
   sight.buffsize = 256;
+  sight.num = 0;
   if ((sight.nodes = (struct ray_node *)calloc(sizeof(struct ray_node), sight.buffsize)) == NULL) {
     fprintf(stderr, "calloc(): %s\n", strerror(errno));
     return -1;
   }
+  //drop first node
+  node = &(sight.nodes[sight.num++]);
+  sight.end = node;
+  coord.alt = 0.2;
+  coord.ground = 0.1;
+  atmos_window(&(node->x),&(node->y),&coord,NULL,NULL);
+  sight.dir_p.x = 0.0;
+  sight.dir_p.y = WINDOW_ANGLE/2.0;
+  sight.dir_p.l = 1.0;
+  vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
   return 0;
 }
 //manage potentially growing buffer
@@ -586,9 +608,69 @@ int ray_buff() {
   }
   return 0;
 }
-//
+//clear ray struct
+void ray_free() {
+  free(sight.nodes);
+  sight.nodes = NULL;
+  sight.buffsize = 0;
+  sight.num = 0;
+  sight.end = NULL;
+  return;
+}
+//trace the ray another step
 void ray_walk() {
-  //
+  struct ray_node *prev, *node;
+  prev = sight.end;
+  node = &(sight.nodes[sight.num++]);
+  sight.end = node;
+  node->x = prev->x + sight.dir_c.x*RAY_STEP;
+  node->y = prev->y - sight.dir_c.z*RAY_STEP;
+  //FIXME - alter direction accord. to Snell's Law
+  
+  //check buffer size
+  ray_buff();
+  return;
+}
+//allocate temporary image buffer for rendering sight line
+double **ray_img_init() {
+  double **ray_img;
+  int x, y;
+  if ((ray_img = (double **)calloc(sizeof(double *), IMAGE_HEIGHT)) == NULL) {
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
+    return NULL;
+  }
+  for (y=0; y < IMAGE_HEIGHT; y++) {
+    if ((ray_img[y] = (double *)calloc(sizeof(double), IMAGE_WIDTH)) == NULL) {
+      fprintf(stderr, "calloc(): %s\n", strerror(errno));
+      return NULL;
+    }
+    for (x=0; x < IMAGE_WIDTH; x++) {
+      ray_img[y][x] = 0.0;
+    }
+  }
+  return ray_img;
+}
+//free temporary image buffer for sight line
+void ray_img_free(double **ray_img) {
+  int y;
+  for (y=0; y < IMAGE_HEIGHT; y++) {
+    free(ray_img[y]);
+  }
+  free(ray_img);
+  return;
+}
+//render sight line to temporary image buffer
+void ray_render(double **ray_img) {
+  int x, y, i;
+  struct ray_node *node;
+  for (i=0; i < sight.num; i++) {
+    node = &(sight.nodes[i]);
+    x = (int)round(node->x);
+    y = (int)round(node->y);
+    if (x >= 0 && x < IMAGE_WIDTH && y >= 0 && y < IMAGE_HEIGHT) {
+      ray_img[y][x] = 1.0;
+    }
+  }
   return;
 }
 
@@ -604,6 +686,7 @@ int main(int argc, char **argv) {
   struct SDL_Surface *s = NULL;
   struct pixel pix;
   struct atmos_bloop *bloop;
+  double **ray_img;
   int x, y, i;
   //animation stuff
   int current_frame;
@@ -619,8 +702,7 @@ int main(int argc, char **argv) {
   if (
     atmos_init() == -1 ||
     bloop_init() == -1 ||
-    contour_init() == -1 ||
-    ray_init() == -1
+    contour_init() == -1
   ) {
     return 1;
   }
@@ -662,6 +744,23 @@ int main(int argc, char **argv) {
       spb_update(&spb);
     }
     
+    //trace sight line
+    if (ray_init() == -1) {
+      return 1;
+    }
+    do {
+      ray_walk();
+    } while (atmos_bounds(sight.end->x,sight.end->y));
+    
+    //render sight line to its own temporary image buffer
+    if ((ray_img = ray_img_init()) == NULL) {
+      return 1;
+    }
+    ray_render(ray_img);
+    
+    //we can free this now, it takes a decent amount of memory
+    ray_free();
+    
     //render image
     if ((s = SDL_CreateRGBSurface(0,IMAGE_WIDTH,IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
       fprintf(stderr, "Failed to create SDL_Surface.\n");
@@ -688,6 +787,14 @@ int main(int argc, char **argv) {
             pix.b += 0.3;
           }
           
+          /*
+           |  LAYER 3
+           |  sight line
+           */
+          pix.r += ray_img[y][x];
+          pix.g += ray_img[y][x];
+          pix.b += ray_img[y][x];
+          
         } else {
           //outside window, everything is black
           pix.r = pix.g = pix.b = 0.0;
@@ -701,13 +808,14 @@ int main(int argc, char **argv) {
     IMG_SavePNG(s,frame_file);
     SDL_FreeSurface(s);
     
+    //clean up
+    ray_img_free(ray_img);
   }
   
   //clean up
   atmos_free();
   free(bloop_list);
   free(contour_list);
-  free(sight.nodes);
   return 0;
 }
 
