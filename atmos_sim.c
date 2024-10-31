@@ -25,6 +25,13 @@
 #define CONTOUR_NUM 18
 #define DENSITY_MAX 1.8 // kg/m^3
 
+/*
+ |  The Gladstone-Dale constant for air, at 273 Kelvin and 14.7 psi,
+ |  for light in the visible spectrum. See Fig. 3(a) here:
+ |  - https://pubs.aip.org/aip/pof/article/35/8/086121/2906851/High-temperature-and-pressure-Gladstone-Dale
+ */
+#define GLADSTONEDALE_CONST 2.3e-4 // m^3/kg
+
 //let's caculate some global variables based on the input metrics above
 double WINDOW_ANGLE, WINDOW_TOP, WINDOW_RIGHT, WINDOW_LEFT, WINDOW_BOTTOM;
 int IMAGE_WIDTH, IMAGE_HEIGHT, BLOOP_NUM;
@@ -433,6 +440,19 @@ void density_to_color(struct pixel *pix, double density, int x, int y) {
   //density out of range, print warning color
   pix->r = 1.0; pix->g = 0.0; pix->b = 1.0;
   return;
+}
+
+/*
+ |  This function takes density and returns the absolute refractive
+ |  index for air. See:
+ |  - https://en.wikipedia.org/wiki/Gladstone%E2%80%93Dale_relation
+ |  - https://webmineral.com/help/Gladstone-Dale.shtml
+ |  
+ |  (See definition of `GLADSTONEDALE_CONST` in this code above for
+ |  a citation on that number.)
+ */
+long double density_to_ior(long double density) {
+  return 1.0 + (density * (long double)GLADSTONEDALE_CONST);
 }
 
 void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
