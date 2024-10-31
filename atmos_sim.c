@@ -104,6 +104,18 @@ struct grade_stop {
   double val;
   struct pixel color;
 };
+//used for sight line raytracing
+struct ray_node {
+  long double x, y;
+};
+struct atmos_ray {
+  struct ray_node *nodes;
+  int buffsize; //memory buffer size
+  int num; //actual number used so far
+  struct vectorC3D dir; //direction vector at ray endpoint
+  struct ray_node *start; //this should point to the beginning node
+  struct ray_node *end; //this should point to the end node
+} sight;
 
 //atmspheric density field, in kg/m^3
 double **atmos;
@@ -195,6 +207,18 @@ void atmos_coords(double x, double y, struct atmos_coord *coord) {
   vectorP3D_assign(&p,vectorC3D_polar(c));
   coord->alt = p.l - EARTH_RADIUS;
   coord->ground = ( (90.0 - p.y + (WINDOW_ANGLE/2.0)) / WINDOW_ANGLE ) * WINDOW_ARC_LENGTH;
+  return;
+}
+//calculate window point from altitude & ground point
+void atmos_window(double *x, double *y, struct atmos_coord *coord) {
+  struct vectorC3D c;
+  struct vectorP3D p;
+  p.l = coord->alt + EARTH_RADIUS;
+  p.x = 0.0;
+  p.y = 90.0 - ( (coord->ground/WINDOW_ARC_LENGTH) * WINDOW_ANGLE ) + (WINDOW_ANGLE/2.0);
+  vectorC3D_assign(&c,vectorP3D_cartesian(p));
+  x[0] = ((c.x-WINDOW_LEFT)/(WINDOW_RIGHT-WINDOW_LEFT)) * IMAGE_WIDTH;
+  y[0] = (1.0 - (c.z-WINDOW_BOTTOM)/(WINDOW_TOP-WINDOW_BOTTOM)) * IMAGE_HEIGHT;
   return;
 }
 //interpolate values for fractional window coordinates
@@ -537,6 +561,38 @@ long double density_to_ior(long double density) {
 }
 
 /*
+ |  ==========
+ |  RAYTRACING
+ |  ==========
+ */
+
+//allocate memory buffer
+int ray_init() {
+  sight.buffsize = 256;
+  if ((sight.nodes = (struct ray_node *)calloc(sizeof(struct ray_node), sight.buffsize)) == NULL) {
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
+    return -1;
+  }
+  return 0;
+}
+//manage potentially growing buffer
+int ray_buff() {
+  if (sight.num == sight.buffsize) {
+    sight.buffsize = sight.buffsize*2;
+    if ((sight.nodes = (struct ray_node *)realloc(sight.nodes, sizeof(struct ray_node) * sight.buffsize)) == NULL) {
+      fprintf(stderr, "realloc(): %s\n", strerror(errno));
+      return -1;
+    }
+  }
+  return 0;
+}
+//
+void ray_walk() {
+  //
+  return;
+}
+
+/*
  |  =============
  |  MAIN FUNCTION
  |  =============
@@ -563,7 +619,8 @@ int main(int argc, char **argv) {
   if (
     atmos_init() == -1 ||
     bloop_init() == -1 ||
-    contour_init() == -1
+    contour_init() == -1 ||
+    ray_init() == -1
   ) {
     return 1;
   }
@@ -650,6 +707,7 @@ int main(int argc, char **argv) {
   atmos_free();
   free(bloop_list);
   free(contour_list);
+  free(sight.nodes);
   return 0;
 }
 
