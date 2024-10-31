@@ -10,21 +10,36 @@
 #include "spb.h"
 #include "vector3D.h"
 
+/*
+ |  ========================
+ |  COMPUTATIONAL PARAMETERS
+ |  ========================
+ */
 #define MAX_STR 1024
+#define ATMOS_STOP_NUM 100
 
-#define EARTH_RADIUS 6371.0 // kilometers
-#define EARTH_CIRCUMFERENCE 40030.173592041 // kilometers
+/*
+ |  =====================
+ |  SIMULATION PARAMETERS
+ |  =====================
+ */
 #define WINDOW_ARC_LENGTH 400.0 // kilometers
 #define WINDOW_ALTITUDE 35.0 // kilometers
-
 #define IMAGE_RES 10.0 // pixels per kilometer
 
 #define FRAME_FOLDER "frames"
 #define FRAMES 50
 #define BLOOPS_PER_FRAME 10
-#define CONTOUR_NUM 18
-#define DENSITY_MAX 1.8 // kg/m^3
+#define CONTOUR_NUM 18 // number of contour lines on density map
+#define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
 
+/*
+ |  ==================
+ |  PHYSICAL CONSTANTS
+ |  ==================
+ */
+#define EARTH_RADIUS 6371.0 // kilometers
+#define EARTH_CIRCUMFERENCE 40030.173592041 // kilometers
 /*
  |  The Gladstone-Dale constant for air, at 273 Kelvin and 14.7 psi,
  |  for light in the visible spectrum. See Fig. 3(a) here:
@@ -32,7 +47,12 @@
  */
 #define GLADSTONEDALE_CONST 2.3e-4 // m^3/kg
 
-//let's caculate some global variables based on the input metrics above
+/*
+ |  =================
+ |  RENDERING METRICS
+ |  =================
+ */
+//let's caculate some global variables based on the simulation parameters
 double WINDOW_ANGLE, WINDOW_TOP, WINDOW_RIGHT, WINDOW_LEFT, WINDOW_BOTTOM;
 int IMAGE_WIDTH, IMAGE_HEIGHT, BLOOP_NUM;
 void global_init() {
@@ -46,27 +66,124 @@ void global_init() {
   BLOOP_NUM = FRAMES * BLOOPS_PER_FRAME;
 }
 
-long double rng(void) {
-  return ((long double)rand())/((long double)RAND_MAX);
-}
-
+/*
+ |  ============
+ |  DATA OBJECTS
+ |  ============
+ */
+//for passing data to our SDL_Image subroutine
 struct pixel {
   double r, g, b;
 };
+//globe-centric polar coordinate
 struct atmos_coord {
   double alt; // altitude in kilometers
   double ground; // ground point in kilometers
 };
+//this is used for approximating the baseline density gradient
 struct atmos_grade_stop {
   double alt; // altitude in kilometers
   double density; // density in kg/m^3
+} atmos_grade[ATMOS_STOP_NUM];
+//discrete primitives for simulating turbulence
+struct atmos_bloop {
+  double x, y; //window coordinate
+  double t; //coordinate within life span (between 0 and 1)
+  double startx, starty, endx, endy; //motion endpoints
+  double startt, dur; //start time and duration
+  struct atmos_coord coord; //center of bloop
+  double radv, radh; //polar radii, vertical & horizontal
+  double amp; //peak amplitude (at centerpoint, midway through duration)
+} *bloop_list;
+//density field contour lines
+struct atmos_contour {
+  double density; // kg/m^3
+} *contour_list;
+//this is used for the heat map color ramp
+struct grade_stop {
+  double val;
+  struct pixel color;
 };
 
 //atmspheric density field, in kg/m^3
 double **atmos;
-//atmospheric baseline density gradient
-#define ATMOS_STOP_NUM 100
-struct atmos_grade_stop atmos_grade[ATMOS_STOP_NUM];
+
+/*
+ |  ===================
+ |  LOW-LEVEL UTILITIES
+ |  ===================
+ */
+
+//generate a random floating point between 0 and 1
+long double rng(void) {
+  return ((long double)rand())/((long double)RAND_MAX);
+}
+/*
+ |  We're using this for approximating a standard atmospheric
+ |  density gradient. Math is dimension-agnostic; function is
+ |  called once for each axis (X and Y). See also:
+ |  - https://en.wikipedia.org/wiki/B%C3%A9zier_curve#Cubic_B%C3%A9zier_curves
+ */
+double bezier_cubic(double n1, double h1, double h2, double n2, double frac) {
+  double q1, q2, q3;
+  double r1, r2;
+  q1 = (h1-n1)*frac+n1;
+  q2 = (h2-h1)*frac+h1;
+  q3 = (n2-h2)*frac+h2;
+  r1 = (q2-q1)*frac+q1;
+  r2 = (q3-q2)*frac+q2;
+  return (r2-r1)*frac+r1;
+}
+//map a pixel object to an SDL image object
+void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
+  ((Uint8 *)s->pixels)[y*s->pitch+x*3+0] = (Uint8)(255.0*fmax(0,fmin(1,p.b)));
+  ((Uint8 *)s->pixels)[y*s->pitch+x*3+1] = (Uint8)(255.0*fmax(0,fmin(1,p.g)));
+  ((Uint8 *)s->pixels)[y*s->pitch+x*3+2] = (Uint8)(255.0*fmax(0,fmin(1,p.r)));
+}
+//calculate color ramp for density heat map
+void density_to_color(struct pixel *pix, double density, int x, int y) {
+  int stop_num = 5;
+  struct grade_stop grade[stop_num], *floor, *ceil;
+  int i;
+  double frac;
+  /*
+   | This color ramp data is a bit hard-wired, but hey it works.
+   */
+  grade[0].val = 0.0;
+  grade[0].color.r = 0.05; grade[0].color.g = 0.05; grade[0].color.b = 0.05;
+  grade[1].val = (1.0/(stop_num-1))*DENSITY_MAX;
+  grade[1].color.r = 0.00; grade[1].color.g = 0.00; grade[1].color.b = 0.20;
+  grade[2].val = (2.0/(stop_num-1))*DENSITY_MAX;
+  grade[2].color.r = 0.00; grade[2].color.g = 0.18; grade[2].color.b = 0.20;
+  grade[3].val = (3.0/(stop_num-1))*DENSITY_MAX;
+  grade[3].color.r = 0.20; grade[3].color.g = 0.20; grade[3].color.b = 0.00;
+  grade[4].val = (4.0/(stop_num-1))*DENSITY_MAX;
+  grade[4].color.r = 0.20; grade[4].color.g = 0.04; grade[4].color.b = 0.00;
+  for (i=0; i < stop_num; i++) {
+    floor = &(grade[i]);
+    if (i == (stop_num-1)) {
+      ceil = &(grade[i]);
+    } else {
+      ceil = &(grade[i+1]);
+    }
+    if (density >= floor->val && density <= ceil->val) {
+      frac = (density - floor->val)/(ceil->val - floor->val);
+      pix->r = (ceil->color.r-floor->color.r)*frac + floor->color.r;
+      pix->g = (ceil->color.g-floor->color.g)*frac + floor->color.g;
+      pix->b = (ceil->color.b-floor->color.b)*frac + floor->color.b;
+      return;
+    }
+  }
+  //density out of range, print warning color
+  pix->r = 1.0; pix->g = 0.0; pix->b = 1.0;
+  return;
+}
+
+/*
+ |  ======================
+ |  RENDER SPACE UTILITIES
+ |  ======================
+ */
 
 //calculate altitude & ground point of the given window point
 void atmos_coords(double x, double y, struct atmos_coord *coord) {
@@ -80,7 +197,7 @@ void atmos_coords(double x, double y, struct atmos_coord *coord) {
   coord->ground = ( (90.0 - p.y + (WINDOW_ANGLE/2.0)) / WINDOW_ANGLE ) * WINDOW_ARC_LENGTH;
   return;
 }
-//interpolate values for fractional field coordinates
+//interpolate values for fractional window coordinates
 double atmos_val(double x, double y) {
   double tl, tr, bl, br;
   int top, left, bottom, right;
@@ -120,16 +237,23 @@ double atmos_val(double x, double y) {
   final = tl*wtl + tr*wtr + bl*wbl + br*wbr;
   return final;
 }
+//are we in bounds?
+int atmos_bounds(double x, double y) {
+  struct atmos_coord coord;
+  atmos_coords(x,y,&coord);
+  if (coord.ground < 0.0 || coord.ground > WINDOW_ARC_LENGTH ||
+      coord.alt < 0.0 || coord.alt > WINDOW_ALTITUDE) {
+    return 0;
+  }
+  return 1;
+}
 
-struct atmos_bloop {
-  double x, y; //window coordinate
-  double t; //coordinate within life span (between 0 and 1)
-  double startx, starty, endx, endy; //motion endpoints
-  double startt, dur; //start time and duration
-  struct atmos_coord coord; //center of bloop
-  double radv, radh; //polar radii, vertical & horizontal
-  double amp; //peak amplitude (at centerpoint, midway through duration)
-} *bloop_list;
+/*
+ |  =====================
+ |  SIMULATING TURBULENCE
+ |  =====================
+ */
+
 //generate random bloops
 int bloop_init() {
   struct atmos_bloop *bloop;
@@ -152,7 +276,6 @@ int bloop_init() {
   }
   return 0;
 }
-
 //set dynamic variables for this bloop at the given time coordinate 
 void bloop_cycle(double t, struct atmos_bloop *bloop) {
   //how far are we through this bloop's life span?
@@ -214,9 +337,13 @@ void bloop_apply(double t, struct atmos_bloop *bloop) {
   return;
 }
 
-struct atmos_contour {
-  double density;
-} *contour_list;
+/*
+ |  =============================
+ |  CONTOUR LINES FOR DENSITY MAP
+ |  =============================
+ */
+
+//initialize contour list
 int contour_init() {
   struct atmos_contour *contour;
   int i;
@@ -288,6 +415,12 @@ int contour_detect(int x, int y) {
   }
 }
 
+/*
+ |  ================
+ |  ATMOSPHERE LOGIC
+ |  ================
+ */
+
 //calculate standard density gradient for the given point
 double atmos_baseline(double x, double y) {
   struct atmos_coord coord;
@@ -311,29 +444,6 @@ double atmos_baseline(double x, double y) {
   //return 1.0 - (coord.alt/WINDOW_ALTITUDE);
   return 0.0;
 }
-
-//are we in bounds?
-int atmos_bounds(double x, double y) {
-  struct atmos_coord coord;
-  atmos_coords(x,y,&coord);
-  if (coord.ground < 0.0 || coord.ground > WINDOW_ARC_LENGTH ||
-      coord.alt < 0.0 || coord.alt > WINDOW_ALTITUDE) {
-    return 0;
-  }
-  return 1;
-}
-
-double bezier_cubic(double n1, double h1, double h2, double n2, double frac) {
-  double q1, q2, q3;
-  double r1, r2;
-  q1 = (h1-n1)*frac+n1;
-  q2 = (h2-h1)*frac+h1;
-  q3 = (n2-h2)*frac+h2;
-  r1 = (q2-q1)*frac+q1;
-  r2 = (q3-q2)*frac+q2;
-  return (r2-r1)*frac+r1;
-}
-
 //initialize stuff
 int atmos_init() {
   int x, y, i, halfway;
@@ -341,8 +451,11 @@ int atmos_init() {
   double frac;
   
   //atmospheric density gradient
-  //https://commons.wikimedia.org/wiki/File:Comparison_US_standard_atmosphere_1962.svg
   /*
+   |  This plot relates altitude vs. density of Earth's
+   |  atmosphere:
+   |  - https://commons.wikimedia.org/wiki/File:Comparison_US_standard_atmosphere_1962.svg
+   |  
    |  This is the plot curve in SVG notation, if X axis
    |  is altitude in km and Y axis is density in kg/m^3:
    |  
@@ -403,50 +516,18 @@ void atmos_free() {
   free(atmos);
 }
 
-struct grade_stop {
-  double val;
-  struct pixel color;
-};
-void density_to_color(struct pixel *pix, double density, int x, int y) {
-  int stop_num = 5;
-  struct grade_stop grade[stop_num], *floor, *ceil;
-  int i;
-  double frac;
-  grade[0].val = 0.0;
-  grade[0].color.r = 0.05; grade[0].color.g = 0.05; grade[0].color.b = 0.05;
-  grade[1].val = (1.0/(stop_num-1))*DENSITY_MAX;
-  grade[1].color.r = 0.00; grade[1].color.g = 0.00; grade[1].color.b = 0.20;
-  grade[2].val = (2.0/(stop_num-1))*DENSITY_MAX;
-  grade[2].color.r = 0.00; grade[2].color.g = 0.18; grade[2].color.b = 0.20;
-  grade[3].val = (3.0/(stop_num-1))*DENSITY_MAX;
-  grade[3].color.r = 0.20; grade[3].color.g = 0.20; grade[3].color.b = 0.00;
-  grade[4].val = (4.0/(stop_num-1))*DENSITY_MAX;
-  grade[4].color.r = 0.20; grade[4].color.g = 0.04; grade[4].color.b = 0.00;
-  for (i=0; i < stop_num; i++) {
-    floor = &(grade[i]);
-    if (i == (stop_num-1)) {
-      ceil = &(grade[i]);
-    } else {
-      ceil = &(grade[i+1]);
-    }
-    if (density >= floor->val && density <= ceil->val) {
-      frac = (density - floor->val)/(ceil->val - floor->val);
-      pix->r = (ceil->color.r-floor->color.r)*frac + floor->color.r;
-      pix->g = (ceil->color.g-floor->color.g)*frac + floor->color.g;
-      pix->b = (ceil->color.b-floor->color.b)*frac + floor->color.b;
-      return;
-    }
-  }
-  //density out of range, print warning color
-  pix->r = 1.0; pix->g = 0.0; pix->b = 1.0;
-  return;
-}
+/*
+ |  ===============
+ |  OPTICAL PHYSICS
+ |  ===============
+ */
 
 /*
  |  This function takes density and returns the absolute refractive
  |  index for air. See:
  |  - https://en.wikipedia.org/wiki/Gladstone%E2%80%93Dale_relation
  |  - https://webmineral.com/help/Gladstone-Dale.shtml
+ |  - https://en.wikipedia.org/wiki/Refractive_index
  |  
  |  (See definition of `GLADSTONEDALE_CONST` in this code above for
  |  a citation on that number.)
@@ -455,11 +536,11 @@ long double density_to_ior(long double density) {
   return 1.0 + (density * (long double)GLADSTONEDALE_CONST);
 }
 
-void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
-  ((Uint8 *)s->pixels)[y*s->pitch+x*3+0] = (Uint8)(255.0*fmax(0,fmin(1,p.b)));
-  ((Uint8 *)s->pixels)[y*s->pitch+x*3+1] = (Uint8)(255.0*fmax(0,fmin(1,p.g)));
-  ((Uint8 *)s->pixels)[y*s->pitch+x*3+2] = (Uint8)(255.0*fmax(0,fmin(1,p.r)));
-}
+/*
+ |  =============
+ |  MAIN FUNCTION
+ |  =============
+ */
 
 int main(int argc, char **argv) {
   struct spb_instance spb;
