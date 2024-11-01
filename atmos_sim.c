@@ -631,6 +631,7 @@ int ray_init() {
   sight.dir_p.y = WINDOW_ANGLE/2.0;
   sight.dir_p.l = 1.0;
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
+  sight.density = atmos_val(node->x,node->y);
   return 0;
 }
 //manage potentially growing buffer
@@ -859,11 +860,11 @@ void ray_walk() {
   //prepare refraction context
   a1 = surface.angle + 90.0;
   d1 = ray_surface_sample(node->x,node->y,a1);
-  t1 = ray_sample_compare(prev_d,d1);
+  t1 = ray_sample_compare(d1,curr_d);
   a2 = surface.angle + 270.0;
   d2 = ray_surface_sample(node->x,node->y,a2);
-  //t2 = ray_sample_compare(prev_d,d2);
-  if (t1==0) {
+  //t2 = ray_sample_compare(d2,curr_d);
+  if (t1==cmp) {
     incoming_normal = a1;
     incoming_density = d1;
     outgoing_normal = a2;
