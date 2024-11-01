@@ -199,6 +199,33 @@ void density_to_color(struct pixel *pix, double density, int x, int y) {
   pix->r = 1.0; pix->g = 0.0; pix->b = 1.0;
   return;
 }
+/*
+ |  given a reference line and two sample vectors, are they
+ |  on the same side or different sides of the line?
+ |  - returns 0 for same side, 1 for different sides.
+ |  - all are given as polar coordinate angles
+ |  - assumes neither sample lies on reference line
+ */
+int vector_compare(double r, double a, double b) {
+  struct vectorP3D pa, pb;
+  struct vectorC3D ca, cb;
+  pa.x = 0.0;
+  pa.y = a - r;
+  pa.l = 1.0;
+  pb.x = 0.0;
+  pb.y = b - r;
+  pb.l = 1.0;
+  vectorC3D_assign(&ca,vectorP3D_cartesian(pa));
+  vectorC3D_assign(&cb,vectorP3D_cartesian(pb));
+  if (
+    (ca.z < 0.0 && cb.z < 0.0) ||
+    (ca.z > 0.0 && cb.z > 0.0)
+  ) {
+    return 0;
+  } else {
+    return 1;
+  }
+}
 
 /*
  |  ======================
@@ -831,7 +858,6 @@ void ray_walk() {
   double incoming_normal, outgoing_normal;
   double incoming_density, outgoing_density;
   double incident_angle, new_angle;
-  int t1;
   int cmp;
   
   //remember old values
@@ -849,22 +875,23 @@ void ray_walk() {
   //check buffer size
   ray_buff();
   
+  //if no refraction, then we're done
+  cmp = ray_sample_compare(prev_d,curr_d);
+  if (cmp == 0) {
+    return;
+  }
   //find refractive surface angle
   surface = ray_find_surface(node->x,node->y);
-  cmp = ray_sample_compare(prev_d,curr_d);
-  //if no refraction, then we're done
-  if (!surface.valid || cmp == 0) {
+  if (!surface.valid) {
     return;
   }
   
   //prepare refraction context
   a1 = surface.angle + 90.0;
   d1 = ray_surface_sample(node->x,node->y,a1);
-  t1 = ray_sample_compare(d1,curr_d);
   a2 = surface.angle + 270.0;
   d2 = ray_surface_sample(node->x,node->y,a2);
-  //t2 = ray_sample_compare(d2,curr_d);
-  if (t1==cmp) {
+  if (vector_compare(surface.angle,prev_p.y,a2)) {
     incoming_normal = a1;
     incoming_density = d1;
     outgoing_normal = a2;
