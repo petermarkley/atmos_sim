@@ -709,6 +709,10 @@ double ray_search(double x, double y, double density, double o1, double o2, int 
   int count;
   a1 = o1; t1 = ot1;
   a2 = o2; t2 = ot2;
+  while (a1 > 360.0 && a2 > 360.0) {
+    a1 -= 360.0;
+    a2 -= 360.0;
+  }
   //find contour leg
   count = 0;
   do {
@@ -733,15 +737,14 @@ double ray_search(double x, double y, double density, double o1, double o2, int 
   return a3;
 }
 //find surface angle at node point
-struct ray_surface ray_find_surface(double x, double y) {
+struct ray_surface ray_find_surface(double x, double y, double dir) {
   struct ray_surface surface;
   struct vectorC3D c1, c2;
   struct vectorP3D p;
   double a1, a2, o1, o2;
   int t1, t2, ot1, ot2;
-  int count, found;
+  int found;
   double density;
-  double sample_step;
   
   //initialize output data object
   surface.contour[0] = 0.0;
@@ -749,35 +752,23 @@ struct ray_surface ray_find_surface(double x, double y) {
   surface.angle = 0.0;
   surface.valid = 0;
   //initialize algorithm values
-  sample_step = 180.0/((double)RAY_MAX_SAMPLES);
   density = sight.density;
   found = 0;
   
   //take first 2 samples ...
-  a1 = 0.0;
+  a1 = dir + 90.0;
+  a2 = dir + 270.0;
+  while (a1 > 360.0 && a2 > 360.0) {
+    a1 -= 360.0;
+    a2 -= 360.0;
+  }
   t1 = ray_sample_compare(density,ray_surface_sample(x,y,a1));
   if (t1 == 0 && found < 2) {
     surface.contour[found++] = a1;
   }
-  a2 = 180.0;
   t2 = ray_sample_compare(density,ray_surface_sample(x,y,a2));
   if (t2 == 0 && found < 2) {
     surface.contour[found++] = a2;
-  }
-  //first thing we need is to find samples on opposite sides of the node's contour
-  count = 0;
-  while (t1 == t2 && found < 2 && count < RAY_MAX_SAMPLES) {
-    a1 += sample_step;
-    t1 = ray_sample_compare(density,ray_surface_sample(x,y,a1));
-    if (t1 == 0 && found < 2) {
-      surface.contour[found++] = a1;
-    }
-    a2 += sample_step;
-    t2 = ray_sample_compare(density,ray_surface_sample(x,y,a2));
-    if (t2 == 0 && found < 2) {
-      surface.contour[found++] = a2;
-    }
-    count++;
   }
   //check for happy accident
   if (found == 2) {
@@ -881,7 +872,7 @@ void ray_walk() {
     return;
   }
   //find refractive surface angle
-  surface = ray_find_surface(node->x,node->y);
+  surface = ray_find_surface(node->x,node->y,prev_p.y);
   if (!surface.valid) {
     return;
   }
