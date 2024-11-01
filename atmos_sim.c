@@ -591,9 +591,9 @@ long double snells_law(long double th, long double d1, long double d2) {
   long double n1, n2;
   n1 = density_to_ior(d1);
   n2 = density_to_ior(d2);
-  val = (n1/n2)*sinl(th);
+  val = (n1/n2)*sinl(th*PI/180.0);
   if (fabsl(val) <= 1.0) {
-    return asinl(val);
+    return asinl(val)*180.0/PI;
   } else {
     /*
      |  Total internal reflection. See:
