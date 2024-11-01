@@ -33,6 +33,8 @@
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
 #define RAY_STEP 1.0 // step size for raytracing through continuously refractive medium
+#define RAY_MAX_SAMPLES 100 // maximum sample count while searching for refraction surface
+#define RAY_SAMPLE_TOLERANCE 1e-10 // maximum difference which is considered the same density (used in binary search algorithm)
 
 /*
  |  ==================
@@ -116,7 +118,13 @@ struct atmos_ray {
   struct ray_node *end; //this should point to the end node
   struct vectorC3D dir_c;
   struct vectorP3D dir_p;
+  double density;
 } sight;
+struct ray_surface {
+  double contour[2];
+  double angle;
+  int valid;
+};
 
 //atmspheric density field, in kg/m^3
 double **atmos;
@@ -567,6 +575,34 @@ void atmos_free() {
 long double density_to_ior(long double density) {
   return 1.0 + (density * (long double)GLADSTONEDALE_CONST);
 }
+/*
+ |  This function takes an incident angle & two densities, and
+ |  gives a refraction angle. See:
+ |  - https://en.wikipedia.org/wiki/Snell%27s_law
+ |  
+ |  Also note:
+ |  - d1 is the previous medium
+ |  - d2 is the new medium
+ |  - These are converted to refractive indices using the
+ |    Gladstone-Dale constant for air. See above.
+ */
+long double snells_law(long double th, long double d1, long double d2) {
+  long double val;
+  long double n1, n2;
+  n1 = density_to_ior(d1);
+  n2 = density_to_ior(d2);
+  val = (n1/n2)*sinl(th);
+  if (fabsl(val) <= 1.0) {
+    return asinl(val);
+  } else {
+    /*
+     |  Total internal reflection. See:
+     |  - https://en.wikipedia.org/wiki/Snell%27s_law#Total_internal_reflection_and_critical_angle
+     |  - https://en.wikipedia.org/wiki/Total_internal_reflection
+     */
+    return 180.0 - th;
+  }
+}
 
 /*
  |  ==========
@@ -617,18 +653,240 @@ void ray_free() {
   sight.end = NULL;
   return;
 }
+//take sample of density field at given distance & direction from given node point
+double ray_surface_sample(double x, double y, double a) {
+  struct vectorP3D p;
+  struct vectorC3D c;
+  p.x = 0.0;
+  p.y = a;
+  p.l = RAY_STEP/3.0;
+  vectorC3D_assign(&c,vectorP3D_cartesian(p));
+  return atmos_val(x+c.x,y-c.z);
+}
+//determine which side of contour the sample is on
+int ray_sample_compare(double contour, double sample) {
+  double diff = fabs(contour - sample);
+  if (diff <= RAY_SAMPLE_TOLERANCE) {
+    return 0;
+  } else if (sample < contour) {
+    return -1;
+  } else {
+    return +1;
+  }
+}
+//binary search algorithm
+double ray_search(double x, double y, double density, double o1, double o2, int ot1, int ot2) {
+  double a1, a2, a3;
+  int t1, t2, t3;
+  int count;
+  a1 = o1; t1 = ot1;
+  a2 = o2; t2 = ot2;
+  //find contour leg
+  count = 0;
+  do {
+    //take a sample halfway between ...
+    a3 = (a1+a2)/2.0;
+    t3 = ray_sample_compare(density,ray_surface_sample(x,y,a3));
+    //set halfway sample as new outside sample on the appropriate side ...
+    if (t3 == t1) {
+      a1 = a3;
+      t1 = t3;
+    } else if (t3 == t2) {
+      a2 = a3;
+      t2 = t3;
+    }
+    //repeat until we find the contour ...
+    count++;
+  } while (t3 != 0 && count < RAY_MAX_SAMPLES);
+  //check for failure
+  if (count == RAY_MAX_SAMPLES) {
+    fprintf(stderr, "ray_search() reached max samples\n");
+  }
+  return a3;
+}
+//find surface angle at node point
+struct ray_surface ray_find_surface(double x, double y) {
+  struct ray_surface surface;
+  struct vectorC3D c1, c2;
+  struct vectorP3D p;
+  double a1, a2, o1, o2;
+  int t1, t2, ot1, ot2;
+  int count, found;
+  double density;
+  double sample_step;
+  
+  //initialize output data object
+  surface.contour[0] = 0.0;
+  surface.contour[1] = 0.0;
+  surface.angle = 0.0;
+  surface.valid = 0;
+  //initialize algorithm values
+  sample_step = 180.0/((double)RAY_MAX_SAMPLES);
+  density = sight.density;
+  found = 0;
+  
+  //take first 2 samples ...
+  a1 = 0.0;
+  t1 = ray_sample_compare(density,ray_surface_sample(x,y,a1));
+  if (t1 == 0 && found < 2) {
+    surface.contour[found++] = a1;
+  }
+  a2 = 180.0;
+  t2 = ray_sample_compare(density,ray_surface_sample(x,y,a2));
+  if (t2 == 0 && found < 2) {
+    surface.contour[found++] = a2;
+  }
+  //first thing we need is to find samples on opposite sides of the node's contour
+  count = 0;
+  while (t1 == t2 && found < 2 && count < RAY_MAX_SAMPLES) {
+    a1 += sample_step;
+    t1 = ray_sample_compare(density,ray_surface_sample(x,y,a1));
+    if (t1 == 0 && found < 2) {
+      surface.contour[found++] = a1;
+    }
+    a2 += sample_step;
+    t2 = ray_sample_compare(density,ray_surface_sample(x,y,a2));
+    if (t2 == 0 && found < 2) {
+      surface.contour[found++] = a2;
+    }
+    count++;
+  }
+  //check for happy accident
+  if (found == 2) {
+    surface.angle = ((surface.contour[0]+surface.contour[1])/2.0) + 90.0;
+    surface.valid = 1;
+    return surface;
+  }
+  //if we haven't passed a contour yet, give up
+  if (t1 == t2) {
+    surface.angle = 0.0;
+    surface.valid = 0;
+    return surface;
+  }
+  //our next step depends on whether we found any contour leg already
+  if (found == 1) {
+    /*
+     |  this situation is honestly just weird and probably means our
+     |  bloop radii are way too small ... who knows
+     */
+    surface.angle = surface.contour[0] + 90.0;
+    surface.valid = 0;
+    return surface;
+  }
+  
+  /*
+   |  okay, no contour legs found but t1 and t2 are on opposite sides of one
+   |  this should be the most normal scenario ... (fingers crossed, right?)
+   |  
+   |  now we can officially begin our binary search for contour legs!
+   */
+  
+  //find first contour leg
+  surface.contour[0] = ray_search(x,y,density,a1,a2,t1,t2);
+  /*
+   |  for second contour leg, we need to start in the same place but switch directions
+   |  that means this time we have to be careful about sample order
+   |  
+   |  let's make sure o1 < o2 before passing them to ray_search() 
+   */
+  if (a1 < a2) {
+    o1 = a1; ot1 = t1;
+    o2 = a2; ot2 = t2;
+  } else {
+    o1 = a2; ot1 = t2;
+    o2 = a1; ot2 = t1;
+  }
+  //now make sure the average will fall on the other side
+  o1 += 360.0;
+  //okay, 2nd binary search
+  surface.contour[1] = ray_search(x,y,density,o1,o2,ot1,ot2);
+  
+  //now that we actually found the contour, find surface angle
+  p.x = 0.0;
+  p.y = surface.contour[0];
+  p.l = 1.0;
+  vectorC3D_assign(&c1,vectorP3D_cartesian(p));
+  p.x = 0.0;
+  p.y = surface.contour[1];
+  p.l = 1.0;
+  vectorC3D_assign(&c2,vectorP3D_cartesian(p));
+  c2.x -= c1.x;
+  c2.z -= c1.z;
+  vectorP3D_assign(&p,vectorC3D_polar(c2));
+  surface.angle = p.y;
+  surface.valid = 1;
+  
+  return surface;
+}
 //trace the ray another step
 void ray_walk() {
   struct ray_node *prev, *node;
+  struct ray_surface surface;
+  struct vectorC3D prev_c;
+  struct vectorP3D prev_p;
+  double prev_d, curr_d;
+  double a1, a2;
+  double d1, d2;
+  double incoming_normal, outgoing_normal;
+  double incoming_density, outgoing_density;
+  double incident_angle, new_angle;
+  int t1;
+  int cmp;
+  
+  //remember old values
   prev = sight.end;
+  prev_d = sight.density;
+  vectorC3D_assign(&prev_c,sight.dir_c);
+  vectorP3D_assign(&prev_p,sight.dir_p);
+  //add new node
   node = &(sight.nodes[sight.num++]);
-  sight.end = node;
   node->x = prev->x + sight.dir_c.x*RAY_STEP;
   node->y = prev->y - sight.dir_c.z*RAY_STEP;
-  //FIXME - alter direction accord. to Snell's Law
-  
+  sight.end = node;
+  sight.density = atmos_val(node->x,node->y);
+  curr_d = sight.density;
   //check buffer size
   ray_buff();
+  
+  //find refractive surface angle
+  surface = ray_find_surface(node->x,node->y);
+  cmp = ray_sample_compare(prev_d,curr_d);
+  //if no refraction, then we're done
+  if (!surface.valid || cmp == 0) {
+    return;
+  }
+  
+  //prepare refraction context
+  a1 = surface.angle + 90.0;
+  d1 = ray_surface_sample(node->x,node->y,a1);
+  t1 = ray_sample_compare(prev_d,d1);
+  a2 = surface.angle + 270.0;
+  d2 = ray_surface_sample(node->x,node->y,a2);
+  //t2 = ray_sample_compare(prev_d,d2);
+  if (t1==0) {
+    incoming_normal = a1;
+    incoming_density = d1;
+    outgoing_normal = a2;
+    outgoing_density = d2;
+  } else {
+    incoming_normal = a2;
+    incoming_density = d2;
+    outgoing_normal = a1;
+    outgoing_density = d1;
+  }
+  incident_angle = prev_p.y + 180.0 - incoming_normal;
+  //alter direction accord. to Snell's Law
+  new_angle = snells_law(
+    incident_angle,
+    incoming_density,
+    outgoing_density
+  ) + outgoing_normal;
+  
+  //save new direction
+  sight.dir_p.x = 0.0;
+  sight.dir_p.y = new_angle;
+  sight.dir_p.l = 1.0;
+  vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
   return;
 }
 //allocate temporary image buffer for rendering sight line
