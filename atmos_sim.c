@@ -749,8 +749,9 @@ struct ray_surface ray_find_surface(double x, double y, double dir) {
   //initialize output data object
   surface.contour[0] = 0.0;
   surface.contour[1] = 0.0;
-  surface.angle = 0.0;
-  surface.valid = 0;
+  surface.angle = (x/WINDOW_ARC_LENGTH)*WINDOW_ANGLE-(WINDOW_ANGLE/2.0);
+  surface.valid = 1;
+  return surface;
   //initialize algorithm values
   density = sight.density;
   found = 0;
@@ -1001,7 +1002,7 @@ int main(int argc, char **argv) {
     }
   }
   
-  spb.real_goal = BLOOP_NUM*FRAMES;
+  spb.real_goal = FRAMES;//BLOOP_NUM*FRAMES;
   spb.bar_goal = 20;
   spb_init(&spb,"",NULL);
   for (current_frame=1; current_frame <= FRAMES; current_frame++) {
@@ -1014,12 +1015,12 @@ int main(int argc, char **argv) {
     }
     
     //apply bloops
-    for (i=0; i < BLOOP_NUM; i++) {
-      bloop = &(bloop_list[i]);
-      bloop_apply(current_frame,bloop);
+    //for (i=0; i < BLOOP_NUM; i++) {
+      //bloop = &(bloop_list[i]);
+      //bloop_apply(current_frame,bloop);
       spb.real_progress++;
       spb_update(&spb);
-    }
+    //}
     
     //trace sight line
     if (ray_init() == -1) {
