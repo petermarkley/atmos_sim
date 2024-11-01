@@ -891,7 +891,7 @@ void ray_walk() {
   d1 = ray_surface_sample(node->x,node->y,a1);
   a2 = surface.angle + 270.0;
   d2 = ray_surface_sample(node->x,node->y,a2);
-  if (vector_compare(surface.angle,prev_p.y,a2)) {
+  if (vector_compare(surface.angle,prev_p.y,a1)) {
     incoming_normal = a1;
     incoming_density = d1;
     outgoing_normal = a2;
