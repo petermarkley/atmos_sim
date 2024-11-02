@@ -36,6 +36,12 @@
 #define RAY_MAX_SAMPLES 100 // maximum sample count while searching for refraction surface
 #define RAY_SAMPLE_TOLERANCE 1e-10 // maximum difference which is considered the same density (used in binary search algorithm)
 
+typedef enum {
+  ATMOS_WEIGHTED_AVERAGE = 0, // (i actually think current implementation of this has identical results to bilinear, except it's probably a tiny bit slower ...)
+  ATMOS_BILINEAR = 1 // probably better than weighted average (currently)
+} atmos_interpolation_type;
+atmos_interpolation_type INTERPOLATION_TYPE = ATMOS_BILINEAR;
+
 /*
  |  ==================
  |  PHYSICAL CONSTANTS
@@ -265,11 +271,12 @@ void atmos_window(double *x, double *y, struct atmos_coord *coord, struct vector
   return;
 }
 //interpolate values for fractional window coordinates
-double atmos_val(double x, double y) {
+double atmos_val(double x, double y, atmos_interpolation_type type) {
   double tl, tr, bl, br;
   int top, left, bottom, right;
   double fracx, fracy;
   double wtl, wtr, wbl, wbr;
+  double end_left, end_right;
   double final;
   //sanity check
   if (x < 0.5 || x > IMAGE_WIDTH-0.5 || y < 0.5 || y > IMAGE_WIDTH-0.5) {
@@ -295,13 +302,21 @@ double atmos_val(double x, double y) {
   //components of position in fractional region
   fracx = x-floor(x);
   fracy = y-floor(y);
-  //weights for each corner
-  wtl = (1.0-fracx)*(1.0-fracy);
-  wtr = fracx*(1.0-fracy);
-  wbl = (1.0-fracx)*fracy;
-  wbr = fracx*fracy;
-  //final
-  final = tl*wtl + tr*wtr + bl*wbl + br*wbr;
+  //which interpolation type are we using?
+  switch (type) {
+    case ATMOS_WEIGHTED_AVERAGE:
+      wtl = (1.0-fracx)*(1.0-fracy);
+      wtr = fracx*(1.0-fracy);
+      wbl = (1.0-fracx)*fracy;
+      wbr = fracx*fracy;
+      final = tl*wtl + tr*wtr + bl*wbl + br*wbr;
+    break;
+    case ATMOS_BILINEAR:
+      end_left = (bl-tl)*fracy + tl;
+      end_right = (br-tr)*fracy + tr;
+      final = (end_right - end_left)*fracx + end_left;
+    break;
+  }
   return final;
 }
 //are we in bounds?
@@ -437,10 +452,10 @@ int contour_detect(int x, int y) {
    |  take a sample at each corner of this pixel, halfway between
    |  it and the neighboring pixels
    */
-  tl = atmos_val(((double)x)-0.5,((double)y)-0.5);
-  tr = atmos_val(((double)x)+0.5,((double)y)-0.5);
-  bl = atmos_val(((double)x)-0.5,((double)y)+0.5);
-  br = atmos_val(((double)x)+0.5,((double)y)+0.5);
+  tl = atmos_val(((double)x)-0.5,((double)y)-0.5,INTERPOLATION_TYPE);
+  tr = atmos_val(((double)x)+0.5,((double)y)-0.5,INTERPOLATION_TYPE);
+  bl = atmos_val(((double)x)-0.5,((double)y)+0.5,INTERPOLATION_TYPE);
+  br = atmos_val(((double)x)+0.5,((double)y)+0.5,INTERPOLATION_TYPE);
   //corner indices in contour array will be negative until initialized
   itl = itr = ibl = ibr = -1;
   //find corner indices
@@ -658,7 +673,7 @@ int ray_init() {
   sight.dir_p.y = WINDOW_ANGLE/2.0;
   sight.dir_p.l = 1.0;
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
-  sight.density = atmos_val(node->x,node->y);
+  sight.density = atmos_val(node->x,node->y,INTERPOLATION_TYPE);
   return 0;
 }
 //manage potentially growing buffer
@@ -689,7 +704,7 @@ double ray_surface_sample(double x, double y, double a) {
   p.y = a;
   p.l = RAY_STEP/3.0;
   vectorC3D_assign(&c,vectorP3D_cartesian(p));
-  return atmos_val(x+c.x,y-c.z);
+  return atmos_val(x+c.x,y-c.z,INTERPOLATION_TYPE);
 }
 //determine which side of contour the sample is on
 int ray_sample_compare(double contour, double sample) {
@@ -862,7 +877,7 @@ void ray_walk() {
   node->x = prev->x + sight.dir_c.x*RAY_STEP;
   node->y = prev->y - sight.dir_c.z*RAY_STEP;
   sight.end = node;
-  sight.density = atmos_val(node->x,node->y);
+  sight.density = atmos_val(node->x,node->y,INTERPOLATION_TYPE);
   curr_d = sight.density;
   //check buffer size
   ray_buff();
