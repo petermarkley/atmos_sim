@@ -14,7 +14,7 @@ frames: atmos_sim
 
 output/out.mp4: frames
 	mkdir -p output
-	ffmpeg -r 5 -pattern_type glob -i "frames/*.png" -vf "scale=2011:191" output/out.mp4
+	ffmpeg -r 5 -pattern_type glob -i "frames/*.png" -vf "scale=4022:382" output/out.mp4
 
 clean:
 	rm -rf atmos_sim atmos_sim.dSYM frames output
