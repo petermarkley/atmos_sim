@@ -791,7 +791,7 @@ struct ray_surface ray_find_surface(double x, double y) {
   
   //scatter wide looking for initial best
   atmos_coords(x,y,&coord);
-  base = ((coord.ground/WINDOW_ARC_LENGTH)-0.5) * WINDOW_ANGLE;
+  base = (0.5-(coord.ground/WINDOW_ARC_LENGTH)) * WINDOW_ANGLE;
   for (i=0; i < RAY_MAX_SAMPLES; i++) {
     angle = (((double)i)/((double)RAY_MAX_SAMPLES))*360.0 + base;
     if (angle > 360.0) {
