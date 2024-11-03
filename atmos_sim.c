@@ -29,6 +29,7 @@
 
 #define FRAME_FOLDER "frames"
 #define FRAMES 200
+#define ENABLE_TURBULENCE 0
 #define BLOOPS_PER_FRAME 2.5
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
@@ -1024,9 +1025,11 @@ int main(int argc, char **argv) {
     }
   }
   
-  spb.real_goal = BLOOP_NUM*FRAMES;
-  spb.bar_goal = 20;
-  spb_init(&spb,"",NULL);
+  if (ENABLE_TURBULENCE) {
+    spb.real_goal = BLOOP_NUM*FRAMES;
+    spb.bar_goal = 20;
+    spb_init(&spb,"",NULL);
+  }
   for (current_frame=1; current_frame <= FRAMES; current_frame++) {
     
     //start with atmosphere baseline
@@ -1036,12 +1039,14 @@ int main(int argc, char **argv) {
       }
     }
     
-    //apply bloops
-    for (i=0; i < BLOOP_NUM; i++) {
-      bloop = &(bloop_list[i]);
-      bloop_apply(current_frame,bloop);
-      spb.real_progress++;
-      spb_update(&spb);
+    if (ENABLE_TURBULENCE) {
+      //apply bloops
+      for (i=0; i < BLOOP_NUM; i++) {
+        bloop = &(bloop_list[i]);
+        bloop_apply(current_frame,bloop);
+        spb.real_progress++;
+        spb_update(&spb);
+      }
     }
     
     //trace sight line
@@ -1107,6 +1112,9 @@ int main(int argc, char **argv) {
     snprintf(frame_file, MAX_STR, frame_fmt_str, current_frame);
     IMG_SavePNG(s,frame_file);
     SDL_FreeSurface(s);
+    if (!ENABLE_TURBULENCE) {
+      break;
+    }
     
     //clean up
     ray_img_free(ray_img);
