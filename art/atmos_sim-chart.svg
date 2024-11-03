@@ -64,7 +64,7 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#1f1f1f"
      inkscape:zoom="0.74400724"
-     inkscape:cx="1105.5"
+     inkscape:cx="1106.8441"
      inkscape:cy="531.58085"
      inkscape:window-width="2560"
      inkscape:window-height="1371"
@@ -91,72 +91,71 @@
        id="image1"
        x="100"
        y="60" />
-    <path
-       style="fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
-       d="m 1106.3556,803.1775 v 42.78724"
-       id="path5" />
     <g
-       id="g79"
-       transform="translate(0,-40)">
+       id="g2">
       <path
          style="fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
-         d="m 106.35684,867.9696 v 42.78724"
+         d="m 1106.3556,763.1775 v 42.78724"
+         id="path5" />
+      <path
+         style="fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
+         d="m 106.35684,827.9696 v 42.78724"
          id="path1" />
       <path
          style="fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
-         d="m 2106.3544,867.9696 v 42.78724"
+         d="m 2106.3544,827.9696 v 42.78724"
          id="path2" />
       <path
          style="fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
-         d="m 1606.355,817.84741 v 42.78724"
+         d="m 1606.355,777.84741 v 42.78724"
          id="path3" />
       <path
          style="fill:none;stroke:#ffffff;stroke-width:2;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
-         d="m 606.35623,817.84741 v 42.78724"
+         d="m 606.35623,777.84741 v 42.78724"
          id="path4" />
       <text
          xml:space="preserve"
          style="font-size:37.3333px;line-height:1.25;font-family:sans-serif;text-align:center;text-anchor:middle"
          x="120.2634"
-         y="900.97687"
+         y="860.97687"
          id="text5"><tspan
            sodipodi:role="line"
            id="tspan5"
            x="120.2634"
-           y="900.97687"
+           y="860.97687"
            style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:37.3333px;font-family:'Courier New';-inkscape-font-specification:'Courier New Bold';text-align:start;text-anchor:start;fill:#ffffff;fill-opacity:1">0 km</tspan></text>
       <text
          xml:space="preserve"
          style="font-size:37.3333px;line-height:1.25;font-family:sans-serif;text-align:center;text-anchor:middle"
          x="622.70776"
-         y="852.07715"
+         y="812.07715"
          id="text6"><tspan
            sodipodi:role="line"
            id="tspan6"
            x="622.70776"
-           y="852.07715"
+           y="812.07715"
            style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:37.3333px;font-family:'Courier New';-inkscape-font-specification:'Courier New Bold';text-align:start;text-anchor:start;fill:#ffffff;fill-opacity:1">100 km</tspan></text>
       <text
          xml:space="preserve"
          style="font-size:37.3333px;line-height:1.25;font-family:sans-serif;text-align:center;text-anchor:middle"
          x="1122.7072"
-         y="839.85223"
+         y="799.85223"
          id="text7"><tspan
            sodipodi:role="line"
            id="tspan7"
            x="1122.7072"
-           y="839.85223"
+           y="799.85223"
            style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:37.3333px;font-family:'Courier New';-inkscape-font-specification:'Courier New Bold';text-align:start;text-anchor:start;fill:#ffffff;fill-opacity:1">200 km</tspan></text>
       <text
          xml:space="preserve"
          style="font-size:37.3333px;line-height:1.25;font-family:sans-serif;text-align:center;text-anchor:middle"
          x="1628.819"
-         y="861.85712"
+         y="821.85712"
          id="text8"><tspan
            sodipodi:role="line"
            id="tspan8"
            x="1628.819"
-           y="861.85712"
+           y="821.85712"
            style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:37.3333px;font-family:'Courier New';-inkscape-font-specification:'Courier New Bold';text-align:start;text-anchor:start;fill:#ffffff;fill-opacity:1">300 km</tspan></text>
     </g>
     <g
