@@ -4,6 +4,8 @@ Simulating a turbulent globe atmosphere, and its refractive effects on long-rang
 
 ![Simulation](art/atmos_sim-chart.png)
 
+# Usage
+
 Make sure you install the [dependencies](#dependencies) below, then after cloning the repo just type:
 ```
 make
