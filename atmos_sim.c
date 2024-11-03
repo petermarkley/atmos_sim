@@ -703,7 +703,7 @@ int ray_init() {
   coord.ground = 0.1;
   atmos_window(&(node->x),&(node->y),&coord,NULL,NULL);
   sight.dir_p.x = 0.0;
-  sight.dir_p.y = (WINDOW_ANGLE/2.0) + 2.0;
+  sight.dir_p.y = (WINDOW_ANGLE/2.0);
   sight.dir_p.l = 1.0;
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
   sight.density = atmos_val(node->x,node->y,INTERPOLATION_TYPE);
@@ -730,12 +730,12 @@ void ray_free() {
   return;
 }
 //take sample of density field at given distance & direction from given node point
-double ray_surface_sample(double x, double y, double a) {
+double ray_surface_sample(double x, double y, double a, double dist) {
   struct vectorP3D p;
   struct vectorC3D c;
   p.x = 0.0;
   p.y = a;
-  p.l = RAY_STEP/3.0;
+  p.l = dist;
   vectorC3D_assign(&c,vectorP3D_cartesian(p));
   return atmos_val(x+c.x,y-c.z,INTERPOLATION_TYPE);
 }
@@ -768,8 +768,8 @@ void ray_search_build_unit(double x, double y, struct ray_search_unit *unit, dou
   }
   //fill rest of values
   for (i=0; i<2; i++) {
-    unit->tan[i] = ray_surface_sample(x,y,unit->surf.tan[i]);
-    unit->norm[i] = ray_surface_sample(x,y,unit->surf.norm[i]);
+    unit->tan[i] = ray_surface_sample(x,y,unit->surf.tan[i],RAY_STEP/3.0);
+    unit->norm[i] = ray_surface_sample(x,y,unit->surf.norm[i],RAY_STEP/3.0);
   }
   //give it a match score
   unit->score = 0.0;
@@ -876,6 +876,7 @@ void ray_walk() {
   double incoming_normal, outgoing_normal;
   double incoming_density, outgoing_density;
   double incident_angle, new_angle;
+  double step;
   int cmp;
   
   //remember old values
@@ -902,8 +903,9 @@ void ray_walk() {
   surface = ray_find_surface(node->x,node->y);
   
   //prepare refraction context
-  d1 = ray_surface_sample(node->x,node->y,surface.norm[0]);
-  d2 = ray_surface_sample(node->x,node->y,surface.norm[1]);
+  step = sin((prev_p.y-surface.tan[1])*PI/180.0)*RAY_STEP;
+  d1 = ray_surface_sample(node->x,node->y,surface.norm[0],step);
+  d2 = ray_surface_sample(node->x,node->y,surface.norm[1],step);
   if (vector_compare(surface.tan[0],prev_p.y,surface.norm[0])) {
     //incident ray is outside
     incoming_normal = surface.norm[0];
