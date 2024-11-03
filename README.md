@@ -2,6 +2,8 @@
 
 Simulating a turbulent globe atmosphere, and its refractive effects on long-range observations, to silence flat earthers.
 
+![Simulation](art/atmos_sim-chart.png)
+
 Make sure you install the [dependencies](#dependencies) below, then after cloning the repo just type:
 ```
 make
