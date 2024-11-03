@@ -33,6 +33,7 @@
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
 #define RAY_STEP 1.0 // step size for raytracing through continuously refractive medium
+#define RAY_MIN_SAMPLES 15 // minimum sample count while searching for refraction surface
 #define RAY_MAX_SAMPLES 100 // maximum sample count while searching for refraction surface
 #define RAY_SAMPLE_TOLERANCE 1e-10 // maximum difference which is considered the same density (used in binary search algorithm)
 
@@ -127,9 +128,29 @@ struct atmos_ray {
   double density;
 } sight;
 struct ray_surface {
-  double contour[2];
-  double angle;
+  /*
+   |  These are all angles measured in degrees, saved straight from
+   |  the `vector3D.h` library--which means they're considered to be
+   |  wound counter-clockwise from the positive X axis, if fed back
+   |  through that library (instead of used directly in some non-
+   |  compatible way).
+   |  
+   |  Also note:
+   |  - `tan[0]` is the left-hand tangent, if you are facing toward
+   |    the thin side.
+   |  - `tan[1]` is the right-hand tangent facing this way.
+   |  - `norm[0]` is the normal pointing toward the thin side.
+   |  - `norm[1]` is the normal pointing toward the thick side.
+   */
+  double tan[2]; //the two surface tangents
+  double norm[2]; //the two surface normals
   int valid;
+};
+struct ray_search_unit {
+  struct ray_surface surf;
+  double tan[2];
+  double norm[2];
+  double score;
 };
 
 //atmspheric density field, in kg/m^3
@@ -511,6 +532,15 @@ double atmos_baseline(double x, double y) {
   int i;
   atmos_coords(x,y,&coord);
   
+  //check for extremes
+  if (coord.alt < atmos_grade[0].alt) {
+    return atmos_grade[0].density;
+  }
+  if (coord.alt > atmos_grade[ATMOS_STOP_NUM-1].alt) {
+    return atmos_grade[ATMOS_STOP_NUM-1].density;
+  }
+  
+  //find place in gradient stops
   for (i=0; i < ATMOS_STOP_NUM; i++) {
     floor = &(atmos_grade[i]);
     if (i == (ATMOS_STOP_NUM-1)) {
@@ -717,141 +747,120 @@ int ray_sample_compare(double contour, double sample) {
     return +1;
   }
 }
-//binary search algorithm
-double ray_search(double x, double y, double density, double o1, double o2, int ot1, int ot2) {
-  double a1, a2, a3;
-  int t1, t2, t3;
-  int count;
-  a1 = o1; t1 = ot1;
-  a2 = o2; t2 = ot2;
-  while (a1 > 360.0 && a2 > 360.0) {
-    a1 -= 360.0;
-    a2 -= 360.0;
+//build search unit struct from given thinner surface normal
+void ray_search_build_unit(double x, double y, struct ray_search_unit *unit, double normal, double density) {
+  int i;
+  unit->surf.norm[0] = normal;
+  unit->surf.tan[0] = normal+90.0;
+  unit->surf.norm[1] = normal+180.0;
+  unit->surf.tan[1] = normal+270.0;
+  //let's make sure things don't get out of hand
+  for (i=0; i<2; i++) {
+    if (unit->surf.tan[i] > 360.0) {
+      unit->surf.tan[i] -= 360.0;
+    }
+    if (unit->surf.norm[i] > 360.0) {
+      unit->surf.norm[i] -= 360.0;
+    }
   }
-  //find contour leg
+  //fill rest of values
+  for (i=0; i<2; i++) {
+    unit->tan[i] = ray_surface_sample(x,y,unit->surf.tan[i]);
+    unit->norm[i] = ray_surface_sample(x,y,unit->surf.norm[i]);
+  }
+  //give it a match score
+  unit->score = 0.0;
+  unit->score += density - unit->norm[0]; //big neg. diff = more points
+  unit->score += unit->norm[1] - density; //big pos. diff = more points
+  unit->score -= fabs(density - unit->tan[0]); //any diff = less points
+  unit->score -= fabs(density - unit->tan[1]); //any diff = less points
+  return;
+}
+//find surface angle at given point
+struct ray_surface ray_find_surface(double x, double y) {
+  struct ray_search_unit units[RAY_MAX_SAMPLES], best, left, right, probe1, probe2;
+  struct atmos_coord coord;
+  double density = sight.density;
+  double angle, base;
+  int best_index, better;
+  int better_left, better_right, best_left, best_right;
+  int count, i;
+  
+  //scatter wide looking for initial best
+  atmos_coords(x,y,&coord);
+  base = ((coord.ground/WINDOW_ARC_LENGTH)-0.5) * WINDOW_ANGLE;
+  for (i=0; i < RAY_MAX_SAMPLES; i++) {
+    angle = (((double)i)/((double)RAY_MAX_SAMPLES))*360.0 + base;
+    if (angle > 360.0) {
+      angle -= 360.0;
+    }
+    ray_search_build_unit(x,y,&(units[i]),angle,density);
+    if (i==0 || units[i].score > units[best_index].score) {
+      best_index = i;
+    }
+  }
+  //keep some notes
+  best = units[best_index];
+  right = units[best_index-1];
+  left = units[best_index+1];
+  
+  //hone in on actual best point
   count = 0;
   do {
-    //take a sample halfway between ...
-    a3 = (a1+a2)/2.0;
-    t3 = ray_sample_compare(density,ray_surface_sample(x,y,a3));
-    //set halfway sample as new outside sample on the appropriate side ...
-    if (t3 == t1) {
-      a1 = a3;
-      t1 = t3;
-    } else if (t3 == t2) {
-      a2 = a3;
-      t2 = t3;
+    //first check to the right
+    angle = (best.surf.norm[0] + right.surf.norm[0])/2.0;
+    ray_search_build_unit(x,y,&probe1,angle,density);
+    //then check to the left
+    angle = (best.surf.norm[0] + left.surf.norm[0])/2.0;
+    ray_search_build_unit(x,y,&probe2,angle,density);
+    
+    //did we find anything useful?
+    better = 0;
+    better_left = better_right = 0;
+    best_left = best_right = 0;
+    if (probe1.score > right.score) {
+      better = 1;
+      better_right = 1;
+      if (probe1.score > best.score) {
+        best_right = 1;
+      }
     }
-    //repeat until we find the contour ...
+    if (probe2.score > left.score) {
+      better = 1;
+      better_left = 1;
+      if (probe2.score > best.score) {
+        best_left = 1;
+      }
+    }
+    //what do we need to shuffle around?
+    if (best_right && !best_left) {
+      left = best;
+      best = probe1;
+    } else if (best_left && !best_right) {
+      right = best;
+      best = probe2;
+    } else if (best_right && best_left) {
+      if (probe1.score >= probe2.score) {
+        left = best;
+        best = probe1;
+      } else {
+        right = best;
+        best = probe2;
+      }
+    } else if (better_right || better_left) {
+      if (better_right) {
+        right = probe1;
+      }
+      if (better_left) {
+        left = probe2;
+      }
+    }
+    
+    //keep track of samples
     count++;
-  } while (t3 != 0 && count < RAY_MAX_SAMPLES);
-  //check for failure
-  if (count == RAY_MAX_SAMPLES) {
-    fprintf(stderr, "ray_search() reached max samples\n");
-  }
-  return a3;
-}
-//find surface angle at node point
-struct ray_surface ray_find_surface(double x, double y, double dir) {
-  struct ray_surface surface;
-  struct vectorC3D c1, c2;
-  struct vectorP3D p;
-  double a1, a2, o1, o2;
-  int t1, t2, ot1, ot2;
-  int found;
-  double density;
+  } while (count < RAY_MAX_SAMPLES || (better != 0 && count < RAY_MAX_SAMPLES));
   
-  //initialize output data object
-  surface.contour[0] = 0.0;
-  surface.contour[1] = 0.0;
-  surface.angle = (x/WINDOW_ARC_LENGTH)*WINDOW_ANGLE-(WINDOW_ANGLE/2.0);
-  surface.valid = 1;
-  return surface;
-  //initialize algorithm values
-  density = sight.density;
-  found = 0;
-  
-  //take first 2 samples ...
-  a1 = dir + 90.0;
-  a2 = dir + 270.0;
-  while (a1 > 360.0 && a2 > 360.0) {
-    a1 -= 360.0;
-    a2 -= 360.0;
-  }
-  t1 = ray_sample_compare(density,ray_surface_sample(x,y,a1));
-  if (t1 == 0 && found < 2) {
-    surface.contour[found++] = a1;
-  }
-  t2 = ray_sample_compare(density,ray_surface_sample(x,y,a2));
-  if (t2 == 0 && found < 2) {
-    surface.contour[found++] = a2;
-  }
-  //check for happy accident
-  if (found == 2) {
-    surface.angle = ((surface.contour[0]+surface.contour[1])/2.0) + 90.0;
-    surface.valid = 1;
-    return surface;
-  }
-  //if we haven't passed a contour yet, give up
-  if (t1 == t2) {
-    surface.angle = 0.0;
-    surface.valid = 0;
-    return surface;
-  }
-  //our next step depends on whether we found any contour leg already
-  if (found == 1) {
-    /*
-     |  this situation is honestly just weird and probably means our
-     |  bloop radii are way too small ... who knows
-     */
-    surface.angle = surface.contour[0] + 90.0;
-    surface.valid = 0;
-    return surface;
-  }
-  
-  /*
-   |  okay, no contour legs found but t1 and t2 are on opposite sides of one
-   |  this should be the most normal scenario ... (fingers crossed, right?)
-   |  
-   |  now we can officially begin our binary search for contour legs!
-   */
-  
-  //find first contour leg
-  surface.contour[0] = ray_search(x,y,density,a1,a2,t1,t2);
-  /*
-   |  for second contour leg, we need to start in the same place but switch directions
-   |  that means this time we have to be careful about sample order
-   |  
-   |  let's make sure o1 < o2 before passing them to ray_search() 
-   */
-  if (a1 < a2) {
-    o1 = a1; ot1 = t1;
-    o2 = a2; ot2 = t2;
-  } else {
-    o1 = a2; ot1 = t2;
-    o2 = a1; ot2 = t1;
-  }
-  //now make sure the average will fall on the other side
-  o1 += 360.0;
-  //okay, 2nd binary search
-  surface.contour[1] = ray_search(x,y,density,o1,o2,ot1,ot2);
-  
-  //now that we actually found the contour, find surface angle
-  p.x = 0.0;
-  p.y = surface.contour[0];
-  p.l = 1.0;
-  vectorC3D_assign(&c1,vectorP3D_cartesian(p));
-  p.x = 0.0;
-  p.y = surface.contour[1];
-  p.l = 1.0;
-  vectorC3D_assign(&c2,vectorP3D_cartesian(p));
-  c2.x -= c1.x;
-  c2.z -= c1.z;
-  vectorP3D_assign(&p,vectorC3D_polar(c2));
-  surface.angle = p.y;
-  surface.valid = 1;
-  
-  return surface;
+  return best.surf;
 }
 //trace the ray another step
 void ray_walk() {
@@ -860,7 +869,6 @@ void ray_walk() {
   struct vectorC3D prev_c;
   struct vectorP3D prev_p;
   double prev_d, curr_d;
-  double a1, a2;
   double d1, d2;
   double incoming_normal, outgoing_normal;
   double incoming_density, outgoing_density;
@@ -888,25 +896,22 @@ void ray_walk() {
     return;
   }
   //find refractive surface angle
-  surface = ray_find_surface(node->x,node->y,prev_p.y);
-  if (!surface.valid) {
-    return;
-  }
+  surface = ray_find_surface(node->x,node->y);
   
   //prepare refraction context
-  a1 = surface.angle + 90.0;
-  d1 = ray_surface_sample(node->x,node->y,a1);
-  a2 = surface.angle + 270.0;
-  d2 = ray_surface_sample(node->x,node->y,a2);
-  if (vector_compare(surface.angle,prev_p.y,a1)) {
-    incoming_normal = a1;
+  d1 = ray_surface_sample(node->x,node->y,surface.norm[0]);
+  d2 = ray_surface_sample(node->x,node->y,surface.norm[1]);
+  if (vector_compare(surface.tan[0],prev_p.y,surface.norm[0])) {
+    //incident ray is outside
+    incoming_normal = surface.norm[0];
     incoming_density = d1;
-    outgoing_normal = a2;
+    outgoing_normal = surface.norm[1];
     outgoing_density = d2;
   } else {
-    incoming_normal = a2;
+    //incident ray is inside
+    incoming_normal = surface.norm[1];
     incoming_density = d2;
-    outgoing_normal = a1;
+    outgoing_normal = surface.norm[0];
     outgoing_density = d1;
   }
   incident_angle = prev_p.y + 180.0 - incoming_normal;
