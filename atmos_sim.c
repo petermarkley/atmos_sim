@@ -25,11 +25,11 @@
  */
 #define WINDOW_ARC_LENGTH 400.0 // kilometers
 #define WINDOW_ALTITUDE 35.0 // kilometers
-#define IMAGE_RES 10.0 // pixels per kilometer
+#define IMAGE_RES 20.0 // pixels per kilometer
 
 #define FRAME_FOLDER "frames"
-#define FRAMES 50
-#define BLOOPS_PER_FRAME 10
+#define FRAMES 200
+#define BLOOPS_PER_FRAME 2.5
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
 #define RAY_STEP 1.0 // step size for raytracing through continuously refractive medium
@@ -42,6 +42,8 @@ typedef enum {
   ATMOS_BILINEAR = 1 // probably better than weighted average (currently)
 } atmos_interpolation_type;
 atmos_interpolation_type INTERPOLATION_TYPE = ATMOS_BILINEAR;
+
+int debug = 0;
 
 /*
  |  ==================
@@ -73,7 +75,7 @@ void global_init() {
   WINDOW_BOTTOM = cos((WINDOW_ANGLE/2.0) * (PI/180.0)) * EARTH_RADIUS; // kilometers
   IMAGE_WIDTH = (int)ceil( (WINDOW_RIGHT-WINDOW_LEFT) * IMAGE_RES ); // pixels
   IMAGE_HEIGHT = (int)ceil( (WINDOW_TOP-WINDOW_BOTTOM) * IMAGE_RES ); // pixels
-  BLOOP_NUM = FRAMES * BLOOPS_PER_FRAME;
+  BLOOP_NUM = (int)round(((double)FRAMES) * ((double)BLOOPS_PER_FRAME));
 }
 
 /*
@@ -700,7 +702,7 @@ int ray_init() {
   coord.ground = 0.1;
   atmos_window(&(node->x),&(node->y),&coord,NULL,NULL);
   sight.dir_p.x = 0.0;
-  sight.dir_p.y = WINDOW_ANGLE/2.0;
+  sight.dir_p.y = (WINDOW_ANGLE/2.0) + 2.0;
   sight.dir_p.l = 1.0;
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
   sight.density = atmos_val(node->x,node->y,INTERPOLATION_TYPE);
@@ -1022,7 +1024,7 @@ int main(int argc, char **argv) {
     }
   }
   
-  spb.real_goal = FRAMES;//BLOOP_NUM*FRAMES;
+  spb.real_goal = BLOOP_NUM*FRAMES;
   spb.bar_goal = 20;
   spb_init(&spb,"",NULL);
   for (current_frame=1; current_frame <= FRAMES; current_frame++) {
@@ -1035,12 +1037,12 @@ int main(int argc, char **argv) {
     }
     
     //apply bloops
-    //for (i=0; i < BLOOP_NUM; i++) {
-      //bloop = &(bloop_list[i]);
-      //bloop_apply(current_frame,bloop);
+    for (i=0; i < BLOOP_NUM; i++) {
+      bloop = &(bloop_list[i]);
+      bloop_apply(current_frame,bloop);
       spb.real_progress++;
       spb_update(&spb);
-    //}
+    }
     
     //trace sight line
     if (ray_init() == -1) {
