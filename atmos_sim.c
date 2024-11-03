@@ -779,15 +779,21 @@ void ray_search_build_unit(double x, double y, struct ray_search_unit *unit, dou
 //find surface angle at given point
 struct ray_surface ray_find_surface(double x, double y) {
   struct ray_search_unit units[RAY_MAX_SAMPLES], best, left, right, probe1, probe2;
+  struct atmos_coord coord;
   double density = sight.density;
-  double angle;
+  double angle, base;
   int best_index, better;
   int better_left, better_right, best_left, best_right;
   int count, i;
   
   //scatter wide looking for initial best
+  atmos_coords(x,y,&coord);
+  base = ((coord.ground/WINDOW_ARC_LENGTH)-0.5) * WINDOW_ANGLE;
   for (i=0; i < RAY_MAX_SAMPLES; i++) {
-    angle = (((double)i)/((double)RAY_MAX_SAMPLES))*360.0;
+    angle = (((double)i)/((double)RAY_MAX_SAMPLES))*360.0 + base;
+    if (angle > 360.0) {
+      angle -= 360.0;
+    }
     ray_search_build_unit(x,y,&(units[i]),angle,density);
     if (i==0 || units[i].score > units[best_index].score) {
       best_index = i;
