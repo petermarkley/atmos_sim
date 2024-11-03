@@ -532,6 +532,15 @@ double atmos_baseline(double x, double y) {
   int i;
   atmos_coords(x,y,&coord);
   
+  //check for extremes
+  if (coord.alt < atmos_grade[0].alt) {
+    return atmos_grade[0].density;
+  }
+  if (coord.alt > atmos_grade[ATMOS_STOP_NUM-1].alt) {
+    return atmos_grade[ATMOS_STOP_NUM-1].density;
+  }
+  
+  //find place in gradient stops
   for (i=0; i < ATMOS_STOP_NUM; i++) {
     floor = &(atmos_grade[i]);
     if (i == (ATMOS_STOP_NUM-1)) {
@@ -802,6 +811,7 @@ struct ray_surface ray_find_surface(double x, double y) {
     //did we find anything useful?
     better = 0;
     better_left = better_right = 0;
+    best_left = best_right = 0;
     if (probe1.score > right.score) {
       better = 1;
       better_right = 1;
@@ -843,11 +853,6 @@ struct ray_surface ray_find_surface(double x, double y) {
     //keep track of samples
     count++;
   } while (count < RAY_MAX_SAMPLES || (better != 0 && count < RAY_MAX_SAMPLES));
-  
-  //check for extreme case
-  if (count == RAY_MAX_SAMPLES) {
-    fprintf(stderr, "ray_search() reached max samples\n");
-  }
   
   return best.surf;
 }
