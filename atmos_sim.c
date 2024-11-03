@@ -128,6 +128,7 @@ struct atmos_ray {
   struct ray_node *end; //this should point to the end node
   struct vectorC3D dir_c;
   struct vectorP3D dir_p;
+  struct vectorP3D start_p;
   double density;
 } sight;
 struct ray_surface {
@@ -255,6 +256,34 @@ int vector_compare(double r, double a, double b) {
   } else {
     return 1;
   }
+}
+//allocate temporary image buffer
+double **img_init() {
+  double **img;
+  int x, y;
+  if ((img = (double **)calloc(sizeof(double *), IMAGE_HEIGHT)) == NULL) {
+    fprintf(stderr, "calloc(): %s\n", strerror(errno));
+    return NULL;
+  }
+  for (y=0; y < IMAGE_HEIGHT; y++) {
+    if ((img[y] = (double *)calloc(sizeof(double), IMAGE_WIDTH)) == NULL) {
+      fprintf(stderr, "calloc(): %s\n", strerror(errno));
+      return NULL;
+    }
+    for (x=0; x < IMAGE_WIDTH; x++) {
+      img[y][x] = 0.0;
+    }
+  }
+  return img;
+}
+//free temporary image buffer
+void img_free(double **img) {
+  int y;
+  for (y=0; y < IMAGE_HEIGHT; y++) {
+    free(img[y]);
+  }
+  free(img);
+  return;
 }
 
 /*
@@ -706,6 +735,7 @@ int ray_init() {
   sight.dir_p.y = (WINDOW_ANGLE/2.0);
   sight.dir_p.l = 1.0;
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
+  vectorP3D_assign(&(sight.start_p),sight.dir_p);
   sight.density = atmos_val(node->x,node->y,INTERPOLATION_TYPE);
   return 0;
 }
@@ -934,34 +964,6 @@ void ray_walk() {
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
   return;
 }
-//allocate temporary image buffer for rendering sight line
-double **ray_img_init() {
-  double **ray_img;
-  int x, y;
-  if ((ray_img = (double **)calloc(sizeof(double *), IMAGE_HEIGHT)) == NULL) {
-    fprintf(stderr, "calloc(): %s\n", strerror(errno));
-    return NULL;
-  }
-  for (y=0; y < IMAGE_HEIGHT; y++) {
-    if ((ray_img[y] = (double *)calloc(sizeof(double), IMAGE_WIDTH)) == NULL) {
-      fprintf(stderr, "calloc(): %s\n", strerror(errno));
-      return NULL;
-    }
-    for (x=0; x < IMAGE_WIDTH; x++) {
-      ray_img[y][x] = 0.0;
-    }
-  }
-  return ray_img;
-}
-//free temporary image buffer for sight line
-void ray_img_free(double **ray_img) {
-  int y;
-  for (y=0; y < IMAGE_HEIGHT; y++) {
-    free(ray_img[y]);
-  }
-  free(ray_img);
-  return;
-}
 //render sight line to temporary image buffer
 void ray_render(double **ray_img) {
   int x, y, i;
@@ -973,6 +975,34 @@ void ray_render(double **ray_img) {
     if (x >= 0 && x < IMAGE_WIDTH && y >= 0 && y < IMAGE_HEIGHT) {
       ray_img[y][x] = 1.0;
     }
+  }
+  return;
+}
+//render straight line (optionally as a dotted line) to temporary image buffer
+void line_draw(double **img, double start_x, double start_y, struct vectorP3D angle, int dotted) {
+  struct vectorC3D diff;
+  double x = sight.nodes[0].x;
+  double y = sight.nodes[0].y;
+  int ix, iy;
+  int count;
+  vectorC3D_assign(&diff,vectorP3D_cartesian(sight.start_p));
+  
+  count = 0;
+  while (atmos_bounds(x,y)) {
+    
+    ix = (int)round(x);
+    iy = (int)round(y);
+    if (
+      (ix >= 0 && ix < IMAGE_WIDTH) &&
+      (iy >= 0 && iy < IMAGE_HEIGHT) &&
+      (!dotted || (count/4)%2)
+    ) {
+      img[iy][ix] = 1.0;
+    }
+    
+    x += diff.x*RAY_STEP;
+    y -= diff.z*RAY_STEP;
+    count++;
   }
   return;
 }
@@ -989,7 +1019,7 @@ int main(int argc, char **argv) {
   struct SDL_Surface *s = NULL;
   struct pixel pix;
   struct atmos_bloop *bloop;
-  double **ray_img;
+  double **ray_img, **line_img;
   int x, y, i;
   //animation stuff
   int current_frame;
@@ -1060,10 +1090,11 @@ int main(int argc, char **argv) {
     } while (atmos_bounds(sight.end->x,sight.end->y));
     
     //render sight line to its own temporary image buffer
-    if ((ray_img = ray_img_init()) == NULL) {
+    if ((ray_img = img_init()) == NULL || (line_img = img_init()) == NULL) {
       return 1;
     }
     ray_render(ray_img);
+    line_draw(line_img,sight.nodes[0].x,sight.nodes[0].y,sight.start_p,1);
     
     //we can free this now, it takes a decent amount of memory
     ray_free();
@@ -1096,6 +1127,14 @@ int main(int argc, char **argv) {
           
           /*
            |  LAYER 3
+           |  straight line reference
+           */
+          pix.r += line_img[y][x]*1.0;
+          pix.g += line_img[y][x]*0.3;
+          pix.b += line_img[y][x]*0.0;
+          
+          /*
+           |  LAYER 4
            |  sight line
            */
           pix.r += ray_img[y][x];
@@ -1119,7 +1158,8 @@ int main(int argc, char **argv) {
     }
     
     //clean up
-    ray_img_free(ray_img);
+    img_free(ray_img);
+    img_free(line_img);
   }
   
   //clean up
