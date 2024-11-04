@@ -47,7 +47,7 @@
 #define ANOM_CHART_Y 131
 #define ANOM_CHART_WIDTH 1061
 #define ANOM_CHART_HEIGHT 521
-#define ANOM_WINDOW_WIDTH 937.13163 // kilometers
+#define ANOM_WINDOW_WIDTH 902.978723404 // kilometers
 #define ANOM_WINDOW_HEIGHT 4.0 // degrees
 
 typedef enum {
