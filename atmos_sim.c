@@ -46,7 +46,7 @@
 #define ANOM_CHART_X 105
 #define ANOM_CHART_Y 131
 #define ANOM_CHART_WIDTH 1061
-#define ANOM_CHART_HEIGHT 522
+#define ANOM_CHART_HEIGHT 521
 #define ANOM_WINDOW_WIDTH 937.13163 // kilometers
 #define ANOM_WINDOW_HEIGHT 4.0 // degrees
 
@@ -200,9 +200,9 @@ double bezier_cubic(double n1, double h1, double h2, double n2, double frac) {
 }
 //map a pixel object to an SDL image object
 void pixel_insert(struct SDL_Surface *s, struct pixel p, int x, int y) {
-  ((Uint8 *)s->pixels)[y*s->pitch+x*3+0] = (Uint8)(255.0*fmax(0,fmin(1,p.b)));
-  ((Uint8 *)s->pixels)[y*s->pitch+x*3+1] = (Uint8)(255.0*fmax(0,fmin(1,p.g)));
-  ((Uint8 *)s->pixels)[y*s->pitch+x*3+2] = (Uint8)(255.0*fmax(0,fmin(1,p.r)));
+  ((Uint8 *)s->pixels)[y*s->pitch+x*3+(s->format->Rshift/8)] = (Uint8)(255.0*fmax(0,fmin(1,p.r)));
+  ((Uint8 *)s->pixels)[y*s->pitch+x*3+(s->format->Gshift/8)] = (Uint8)(255.0*fmax(0,fmin(1,p.g)));
+  ((Uint8 *)s->pixels)[y*s->pitch+x*3+(s->format->Bshift/8)] = (Uint8)(255.0*fmax(0,fmin(1,p.b)));
 }
 //calculate color ramp for density heat map
 void density_to_color(struct pixel *pix, double density, int x, int y) {
@@ -1214,16 +1214,18 @@ int main(int argc, char **argv) {
     SDL_FreeSurface(s);
     
     //render image for angular anomaly chart
-    if ((anom = SDL_CreateRGBSurface(0,ANOM_IMAGE_WIDTH,ANOM_IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
+    if ((anom = IMG_Load(ANOM_CHART_BASE)) == NULL) {
       fprintf(stderr, "Failed to create SDL_Surface.\n");
       return -1;
     }
     for (y=0; y < ANOM_IMAGE_HEIGHT; y++) {
       for (x=0; x < ANOM_IMAGE_WIDTH; x++) {
-        pix.r = anom_img[y][x]*1.0;
-        pix.g = anom_img[y][x]*0.3;
-        pix.b = anom_img[y][x]*0.0;
-        pixel_insert(anom,pix,x,y);
+        if (anom_img[y][x] > 0.0) {
+          pix.r = anom_img[y][x]*1.0;
+          pix.g = anom_img[y][x]*0.3;
+          pix.b = anom_img[y][x]*0.0;
+          pixel_insert(anom,pix,x,y);
+        }
       }
     }
     //output image file
