@@ -2,6 +2,8 @@
 
 Simulating a turbulent globe atmosphere, and its refractive effects on long-range observations, to silence flat earthers.
 
+This code generates an animated vertical transect (sort of like [these](https://psl.noaa.gov/data/atmoswrit/profile/)) marked with the refracted line of sight. Here is an example (with earth curvature exaggerated by a factor of 4):
+
 ![Simulation](art/atmos_sim-chart.png)
 
 # Usage
