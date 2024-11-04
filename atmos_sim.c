@@ -23,14 +23,14 @@
  |  SIMULATION PARAMETERS
  |  =====================
  */
-#define WINDOW_ARC_LENGTH 400.0 // kilometers
+#define WINDOW_ARC_LENGTH 900.0 // kilometers
 #define WINDOW_ALTITUDE 35.0 // kilometers
 #define IMAGE_RES 20.0 // pixels per kilometer
 
 #define FRAME_FOLDER "frames"
 #define FRAMES 50
-#define ENABLE_TURBULENCE 0
-#define BLOOPS_PER_FRAME 2.5
+#define ENABLE_TURBULENCE 1
+#define BLOOPS_PER_FRAME 7.0
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
 #define RAY_STEP 1.0 // step size for raytracing through continuously refractive medium
@@ -436,11 +436,11 @@ int bloop_init() {
     bloop->starty = rng()*IMAGE_HEIGHT;
     bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.02;
     bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.02;
-    bloop->dur = rng()*FRAMES*1.2;
+    bloop->dur = rng()*FRAMES*1.0 + FRAMES*0.2;
     bloop->startt = rng()*FRAMES - bloop->dur/2.0;
     bloop->radv = rng()*4.0+1.0;
-    bloop->radh = rng()*40.0+10.0;
-    bloop->amp = pow(2.0, rng()*0.6-0.3 );
+    bloop->radh = rng()*80.0+20.0;
+    bloop->amp = pow(2.0, rng()*0.7-0.35 );
   }
   return 0;
 }
@@ -998,7 +998,7 @@ void ray_walk() {
   return;
 }
 //render sight line to temporary image buffer
-void ray_render(double **ray_img) {
+void ray_render(struct spb_instance *spb, double **ray_img) {
   int x, y, i;
   struct ray_node *node;
   for (i=0; i < sight.num; i++) {
@@ -1008,11 +1008,14 @@ void ray_render(double **ray_img) {
     if (x >= 0 && x < IMAGE_WIDTH && y >= 0 && y < IMAGE_HEIGHT) {
       ray_img[y][x] = 1.0;
     }
+    if (spb->real_progress < spb->real_goal) {
+      spb_update(spb);
+    }
   }
   return;
 }
 //render straight line (optionally as a dotted line) to temporary image buffer
-void line_draw(double **img, double start_x, double start_y, struct vectorP3D angle, int dotted) {
+void line_draw(struct spb_instance *spb, double **img, double start_x, double start_y, struct vectorP3D angle, int dotted) {
   struct vectorC3D diff;
   double x = sight.nodes[0].x;
   double y = sight.nodes[0].y;
@@ -1036,11 +1039,14 @@ void line_draw(double **img, double start_x, double start_y, struct vectorP3D an
     x += diff.x*RAY_STEP;
     y -= diff.z*RAY_STEP;
     count++;
+    if (spb->real_progress < spb->real_goal) {
+      spb_update(spb);
+    }
   }
   return;
 }
 //measure sight line's deviation from straight and plot on angular anomaly chart
-void ang_anom(double **img) {
+void ang_anom(struct spb_instance *spb, double **img) {
   struct vectorC3D c;
   struct ray_node *node;
   double ax, ay, dist, anom;
@@ -1066,6 +1072,9 @@ void ang_anom(double **img) {
     //if safe, mark a pixel
     if ((x >= 0 && x < ANOM_IMAGE_WIDTH) && (y >= 0 && y < ANOM_IMAGE_HEIGHT)) {
       img[y][x] = 1.0;
+    }
+    if (spb->real_progress < spb->real_goal) {
+      spb_update(spb);
     }
   }
   return;
@@ -1139,6 +1148,9 @@ int main(int argc, char **argv) {
     }
     do {
       ray_walk();
+      if (spb.real_progress < spb.real_goal) {
+        spb_update(&spb);
+      }
     } while (atmos_bounds(sight.end->x,sight.end->y));
     
     //render sight line to its own temporary image buffer
@@ -1149,11 +1161,11 @@ int main(int argc, char **argv) {
     ) {
       return 1;
     }
-    ray_render(ray_img);
-    line_draw(line_img,sight.nodes[0].x,sight.nodes[0].y,sight.start_p,1);
+    ray_render(&spb,ray_img);
+    line_draw(&spb,line_img,sight.nodes[0].x,sight.nodes[0].y,sight.start_p,1);
     
     //render angular anomaly chart of sight line
-    ang_anom(anom_img);
+    ang_anom(&spb,anom_img);
     
     //we can free this now, it takes a decent amount of memory
     ray_free();
@@ -1213,6 +1225,10 @@ int main(int argc, char **argv) {
     IMG_SavePNG(s,frame_file);
     SDL_FreeSurface(s);
     
+    if (spb.real_progress < spb.real_goal) {
+      spb_update(&spb);
+    }
+    
     //render image for angular anomaly chart
     if ((anom = IMG_Load(ANOM_CHART_BASE)) == NULL) {
       fprintf(stderr, "Failed to create SDL_Surface.\n");
@@ -1235,6 +1251,9 @@ int main(int argc, char **argv) {
     
     if (!ENABLE_TURBULENCE) {
       break;
+    }
+    if (spb.real_progress < spb.real_goal) {
+      spb_update(&spb);
     }
     
     //clean up
