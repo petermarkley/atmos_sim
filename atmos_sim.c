@@ -28,7 +28,7 @@
 #define IMAGE_RES 20.0 // pixels per kilometer
 
 #define FRAME_FOLDER "frames"
-#define FRAMES 200
+#define FRAMES 50
 #define ENABLE_TURBULENCE 0
 #define BLOOPS_PER_FRAME 2.5
 #define CONTOUR_NUM 18 // number of contour lines on density map
@@ -37,6 +37,18 @@
 #define RAY_MIN_SAMPLES 15 // minimum sample count while searching for refraction surface
 #define RAY_MAX_SAMPLES 100 // maximum sample count while searching for refraction surface
 #define RAY_SAMPLE_TOLERANCE 1e-10 // maximum difference which is considered the same density (used in binary search algorithm)
+
+//params for "Angular Anomaly" chart
+#define ANOM_FRAME_FOLDER "frames-anom"
+#define ANOM_CHART_BASE "art/ang_anom-chart-base.png"
+#define ANOM_IMAGE_WIDTH 1204
+#define ANOM_IMAGE_HEIGHT 742
+#define ANOM_CHART_X 105
+#define ANOM_CHART_Y 131
+#define ANOM_CHART_WIDTH 1061
+#define ANOM_CHART_HEIGHT 522
+#define ANOM_WINDOW_WIDTH 937.13163 // kilometers
+#define ANOM_WINDOW_HEIGHT 4.0 // degrees
 
 typedef enum {
   ATMOS_WEIGHTED_AVERAGE = 0, // (i actually think current implementation of this has identical results to bilinear, except it's probably a tiny bit slower ...)
@@ -258,32 +270,53 @@ int vector_compare(double r, double a, double b) {
   }
 }
 //allocate temporary image buffer
-double **img_init() {
+double **img_init(int width, int height) {
   double **img;
   int x, y;
-  if ((img = (double **)calloc(sizeof(double *), IMAGE_HEIGHT)) == NULL) {
+  if ((img = (double **)calloc(sizeof(double *), height)) == NULL) {
     fprintf(stderr, "calloc(): %s\n", strerror(errno));
     return NULL;
   }
-  for (y=0; y < IMAGE_HEIGHT; y++) {
-    if ((img[y] = (double *)calloc(sizeof(double), IMAGE_WIDTH)) == NULL) {
+  for (y=0; y < height; y++) {
+    if ((img[y] = (double *)calloc(sizeof(double), width)) == NULL) {
       fprintf(stderr, "calloc(): %s\n", strerror(errno));
       return NULL;
     }
-    for (x=0; x < IMAGE_WIDTH; x++) {
+    for (x=0; x < width; x++) {
       img[y][x] = 0.0;
     }
   }
   return img;
 }
 //free temporary image buffer
-void img_free(double **img) {
+void img_free(double **img, int height) {
   int y;
-  for (y=0; y < IMAGE_HEIGHT; y++) {
+  for (y=0; y < height; y++) {
     free(img[y]);
   }
   free(img);
   return;
+}
+//make sure the given folder exists
+int mkdir_safe(const char *folder) {
+  struct stat dir;
+  if (stat(folder, &dir) == 0) {
+    if (!S_ISDIR(dir.st_mode)) {
+      fprintf(stderr, "Path '%s' exists but is not a folder\n",folder);
+      return -1;
+    }
+  } else {
+    if (errno == ENOENT) {
+      if (mkdir(folder, 0700) != 0) {
+        fprintf(stderr, "mkdir() on '%s': %s\n", folder, strerror(errno));
+        return -1;
+      }
+    } else {
+      fprintf(stderr, "stat() on '%s': %s\n", folder, strerror(errno));
+      return -1;
+    }
+  }
+  return 0;
 }
 
 /*
@@ -1006,6 +1039,37 @@ void line_draw(double **img, double start_x, double start_y, struct vectorP3D an
   }
   return;
 }
+//measure sight line's deviation from straight and plot on angular anomaly chart
+void ang_anom(double **img) {
+  struct vectorC3D c;
+  struct ray_node *node;
+  double ax, ay, dist, anom;
+  double chart_x, chart_y;
+  int i, x, y;
+  ax = sight.nodes[0].x;
+  ay = sight.nodes[0].y;
+  for (i=0; i < sight.num; i++) {
+    node = &(sight.nodes[i]);
+    //transform node into coordinates relative to the straight line
+    c.x = node->x - ax;
+    c.y = 0.0;
+    c.z = ay - node->y;
+    vectorC3D_rotateY(&c,sight.start_p.y);
+    //calculate values
+    dist = c.x/IMAGE_RES;
+    anom = fabs(atan(c.z/c.x)*180.0/PI);
+    //find position on chart image
+    chart_x = (dist/ANOM_WINDOW_WIDTH)*ANOM_CHART_WIDTH + ANOM_CHART_X;
+    chart_y = ANOM_CHART_HEIGHT - (anom/ANOM_WINDOW_HEIGHT)*ANOM_CHART_HEIGHT + ANOM_CHART_Y;
+    x = (int)round(chart_x);
+    y = (int)round(chart_y);
+    //if safe, mark a pixel
+    if ((x >= 0 && x < ANOM_IMAGE_WIDTH) && (y >= 0 && y < ANOM_IMAGE_HEIGHT)) {
+      img[y][x] = 1.0;
+    }
+  }
+  return;
+}
 
 /*
  |  =============
@@ -1015,23 +1079,25 @@ void line_draw(double **img, double start_x, double start_y, struct vectorP3D an
 
 int main(int argc, char **argv) {
   struct spb_instance spb;
-  struct stat dir;
-  struct SDL_Surface *s = NULL;
+  struct SDL_Surface *s = NULL, *anom = NULL;
   struct pixel pix;
   struct atmos_bloop *bloop;
-  double **ray_img, **line_img;
+  double **ray_img, **line_img, **anom_img;
   int x, y, i;
   //animation stuff
   int current_frame;
   int frame_digits = (int)ceil(log10(FRAMES));
   char frame_fmt_str[MAX_STR];
   char frame_file[MAX_STR];
+  char anom_fmt_str[MAX_STR];
+  char anom_file[MAX_STR];
   
   //initialize stuff
   global_init();
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
   srand(235432);
   snprintf(frame_fmt_str, MAX_STR, "%s/%%0%dd.png", FRAME_FOLDER, frame_digits);
+  snprintf(anom_fmt_str, MAX_STR, "%s/%%0%dd.png", ANOM_FRAME_FOLDER, frame_digits);
   if (
     atmos_init() == -1 ||
     bloop_init() == -1 ||
@@ -1039,23 +1105,9 @@ int main(int argc, char **argv) {
   ) {
     return 1;
   }
-  //make sure output folder exists
-  if (stat(FRAME_FOLDER, &dir) == 0) {
-    if (!S_ISDIR(dir.st_mode)) {
-      fprintf(stderr, "Path '%s' exists but is not a folder\n",FRAME_FOLDER);
-      return 1;
-    }
-  } else {
-    if (errno == ENOENT) {
-      if (mkdir(FRAME_FOLDER, 0700) != 0) {
-        fprintf(stderr, "mkdir() on '%s': %s\n", FRAME_FOLDER, strerror(errno));
-        return 1;
-      }
-    } else {
-      fprintf(stderr, "stat() on '%s': %s\n", FRAME_FOLDER, strerror(errno));
-      return 1;
-    }
-  }
+  //make sure output folders exists
+  mkdir_safe(FRAME_FOLDER);
+  mkdir_safe(ANOM_FRAME_FOLDER);
   
   if (ENABLE_TURBULENCE) {
     spb.real_goal = BLOOP_NUM*FRAMES;
@@ -1090,11 +1142,18 @@ int main(int argc, char **argv) {
     } while (atmos_bounds(sight.end->x,sight.end->y));
     
     //render sight line to its own temporary image buffer
-    if ((ray_img = img_init()) == NULL || (line_img = img_init()) == NULL) {
+    if (
+      (ray_img = img_init(IMAGE_WIDTH,IMAGE_HEIGHT)) == NULL ||
+      (line_img = img_init(IMAGE_WIDTH,IMAGE_HEIGHT)) == NULL ||
+      (anom_img = img_init(ANOM_IMAGE_WIDTH,ANOM_IMAGE_HEIGHT)) == NULL
+    ) {
       return 1;
     }
     ray_render(ray_img);
     line_draw(line_img,sight.nodes[0].x,sight.nodes[0].y,sight.start_p,1);
+    
+    //render angular anomaly chart of sight line
+    ang_anom(anom_img);
     
     //we can free this now, it takes a decent amount of memory
     ray_free();
@@ -1153,13 +1212,33 @@ int main(int argc, char **argv) {
     snprintf(frame_file, MAX_STR, frame_fmt_str, current_frame);
     IMG_SavePNG(s,frame_file);
     SDL_FreeSurface(s);
+    
+    //render image for angular anomaly chart
+    if ((anom = SDL_CreateRGBSurface(0,ANOM_IMAGE_WIDTH,ANOM_IMAGE_HEIGHT,24,0,0,0,0)) == NULL) {
+      fprintf(stderr, "Failed to create SDL_Surface.\n");
+      return -1;
+    }
+    for (y=0; y < ANOM_IMAGE_HEIGHT; y++) {
+      for (x=0; x < ANOM_IMAGE_WIDTH; x++) {
+        pix.r = anom_img[y][x]*1.0;
+        pix.g = anom_img[y][x]*0.3;
+        pix.b = anom_img[y][x]*0.0;
+        pixel_insert(anom,pix,x,y);
+      }
+    }
+    //output image file
+    snprintf(anom_file, MAX_STR, anom_fmt_str, current_frame);
+    IMG_SavePNG(anom,anom_file);
+    SDL_FreeSurface(anom);
+    
     if (!ENABLE_TURBULENCE) {
       break;
     }
     
     //clean up
-    img_free(ray_img);
-    img_free(line_img);
+    img_free(ray_img,IMAGE_HEIGHT);
+    img_free(line_img,IMAGE_HEIGHT);
+    img_free(anom_img,ANOM_IMAGE_HEIGHT);
   }
   
   //clean up
