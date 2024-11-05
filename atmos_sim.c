@@ -534,10 +534,12 @@ int contour_init() {
     fprintf(stderr, "calloc(): %s\n", strerror(errno));
     return -1;
   }
+  fprintf(stdout,"Density contour lines (kg/m^3):\n");
   for (i=0; i < CONTOUR_NUM; i++) {
     density = ((double)(i+1)) * interval;
     contour = &(contour_list[i]);
     contour->density = density;
+    fprintf(stdout,"\t%02d)  %0.3lf\n",i,density);
   }
   return 0;
 }
