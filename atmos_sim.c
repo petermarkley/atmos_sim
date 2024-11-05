@@ -29,13 +29,15 @@
 
 #define FRAME_FOLDER "frames"
 #define FRAMES 50
+#define RNG_SEED 6651
 #define ENABLE_TURBULENCE 1
-#define BLOOPS_PER_FRAME 7.0
+#define BLOOPS_PER_FRAME 10.0
 #define CONTOUR_NUM 18 // number of contour lines on density map
 #define DENSITY_MAX 1.8 // top of heat map color ramp, in kg/m^3
 #define RAY_STEP 1.0 // step size for raytracing through continuously refractive medium
 #define RAY_MIN_SAMPLES 15 // minimum sample count while searching for refraction surface
 #define RAY_MAX_SAMPLES 100 // maximum sample count while searching for refraction surface
+#define RAY_MAX_NODES 16383 // maximum length of ray
 #define RAY_SAMPLE_TOLERANCE 1e-10 // maximum difference which is considered the same density (used in binary search algorithm)
 
 //params for "Angular Anomaly" chart
@@ -425,6 +427,8 @@ int atmos_bounds(double x, double y) {
 //generate random bloops
 int bloop_init() {
   struct atmos_bloop *bloop;
+  struct atmos_coord coord, coord_start, coord_end;
+  double temp;
   int i;
   if ((bloop_list = (struct atmos_bloop *)calloc(sizeof(struct atmos_bloop), BLOOP_NUM)) == NULL) {
     fprintf(stderr, "calloc(): %s\n", strerror(errno));
@@ -432,15 +436,24 @@ int bloop_init() {
   }
   for (i=0; i < BLOOP_NUM; i++) {
     bloop = &(bloop_list[i]);
-    bloop->startx = rng()*IMAGE_WIDTH;
-    bloop->starty = rng()*IMAGE_HEIGHT;
-    bloop->endx = bloop->startx + rng()*IMAGE_WIDTH*0.02;
-    bloop->endy = bloop->starty + rng()*IMAGE_HEIGHT*0.02;
+    //start position
+    coord_start.alt = pow(rng(),3.5)*WINDOW_ALTITUDE;
+    coord_start.ground = pow(rng(),1.5)*WINDOW_ARC_LENGTH;
+    atmos_window(&(bloop->startx),&(bloop->starty),&coord_start,NULL,NULL);
+    //end position
+    coord_end.alt = coord_start.alt + (rng()*2.0-1.0)*WINDOW_ALTITUDE*0.02;
+    coord_end.ground = coord_start.ground + (rng()*2.0-1.0)*WINDOW_ARC_LENGTH*0.02;
+    atmos_window(&(bloop->endx),&(bloop->endy),&coord_end,NULL,NULL);
+    //check midpoint
+    coord.alt = (coord_start.alt + coord_end.alt)/2.0;
+    coord.ground = (coord_start.ground + coord_end.ground)/2.0;
+    //other metrics
     bloop->dur = rng()*FRAMES*1.0 + FRAMES*0.2;
     bloop->startt = rng()*FRAMES - bloop->dur/2.0;
-    bloop->radv = rng()*4.0+1.0;
-    bloop->radh = rng()*80.0+20.0;
-    bloop->amp = pow(2.0, rng()*0.7-0.35 );
+    bloop->radv = rng()*10.0+2.0;
+    bloop->radh = rng()*100.0+100.0;
+    temp = pow(rng(),(coord.alt/WINDOW_ALTITUDE)*20.0+0.8); //introduce altitude bias
+    bloop->amp = pow(2.0, temp*0.4-0.2 );
   }
   return 0;
 }
@@ -761,11 +774,11 @@ int ray_init() {
   //drop first node
   node = &(sight.nodes[sight.num++]);
   sight.end = node;
-  coord.alt = 0.2;
-  coord.ground = 0.1;
+  coord.alt = 0.1;
+  coord.ground = 0.4;
   atmos_window(&(node->x),&(node->y),&coord,NULL,NULL);
   sight.dir_p.x = 0.0;
-  sight.dir_p.y = (WINDOW_ANGLE/2.0);
+  sight.dir_p.y = WINDOW_ANGLE*(0.5-(coord.ground/WINDOW_ARC_LENGTH));
   sight.dir_p.l = 1.0;
   vectorC3D_assign(&(sight.dir_c),vectorP3D_cartesian(sight.dir_p));
   vectorP3D_assign(&(sight.start_p),sight.dir_p);
@@ -1008,7 +1021,7 @@ void ray_render(struct spb_instance *spb, double **ray_img) {
     if (x >= 0 && x < IMAGE_WIDTH && y >= 0 && y < IMAGE_HEIGHT) {
       ray_img[y][x] = 1.0;
     }
-    if (spb->real_progress < spb->real_goal) {
+    if (ENABLE_TURBULENCE && spb->real_progress < spb->real_goal) {
       spb_update(spb);
     }
   }
@@ -1039,7 +1052,7 @@ void line_draw(struct spb_instance *spb, double **img, double start_x, double st
     x += diff.x*RAY_STEP;
     y -= diff.z*RAY_STEP;
     count++;
-    if (spb->real_progress < spb->real_goal) {
+    if (ENABLE_TURBULENCE && spb->real_progress < spb->real_goal) {
       spb_update(spb);
     }
   }
@@ -1073,7 +1086,7 @@ void ang_anom(struct spb_instance *spb, double **img) {
     if ((x >= 0 && x < ANOM_IMAGE_WIDTH) && (y >= 0 && y < ANOM_IMAGE_HEIGHT)) {
       img[y][x] = 1.0;
     }
-    if (spb->real_progress < spb->real_goal) {
+    if (ENABLE_TURBULENCE && spb->real_progress < spb->real_goal) {
       spb_update(spb);
     }
   }
@@ -1104,7 +1117,7 @@ int main(int argc, char **argv) {
   //initialize stuff
   global_init();
   fprintf(stdout, "WINDOW_ANGLE: %lf\nIMAGE_WIDTH: %d\nIMAGE_HEIGHT: %d\n",WINDOW_ANGLE,IMAGE_WIDTH,IMAGE_HEIGHT);
-  srand(235432);
+  srand(RNG_SEED);
   snprintf(frame_fmt_str, MAX_STR, "%s/%%0%dd.png", FRAME_FOLDER, frame_digits);
   snprintf(anom_fmt_str, MAX_STR, "%s/%%0%dd.png", ANOM_FRAME_FOLDER, frame_digits);
   if (
@@ -1148,10 +1161,10 @@ int main(int argc, char **argv) {
     }
     do {
       ray_walk();
-      if (spb.real_progress < spb.real_goal) {
+      if (ENABLE_TURBULENCE && spb.real_progress < spb.real_goal) {
         spb_update(&spb);
       }
-    } while (atmos_bounds(sight.end->x,sight.end->y));
+    } while (sight.num < RAY_MAX_NODES && atmos_bounds(sight.end->x,sight.end->y));
     
     //render sight line to its own temporary image buffer
     if (
@@ -1225,7 +1238,7 @@ int main(int argc, char **argv) {
     IMG_SavePNG(s,frame_file);
     SDL_FreeSurface(s);
     
-    if (spb.real_progress < spb.real_goal) {
+    if (ENABLE_TURBULENCE && spb.real_progress < spb.real_goal) {
       spb_update(&spb);
     }
     
@@ -1252,7 +1265,7 @@ int main(int argc, char **argv) {
     if (!ENABLE_TURBULENCE) {
       break;
     }
-    if (spb.real_progress < spb.real_goal) {
+    if (ENABLE_TURBULENCE && spb.real_progress < spb.real_goal) {
       spb_update(&spb);
     }
     
